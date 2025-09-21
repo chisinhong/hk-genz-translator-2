@@ -1,13 +1,5 @@
-import {
-  initializeApp,
-  getApps,
-  getApp,
-} from 'firebase/app';
-import {
-  getFirestore,
-  collection,
-  addDoc,
-} from 'firebase/firestore';
+import { initializeApp, getApps, getApp } from 'firebase/app';
+import { getFirestore, collection, addDoc } from 'firebase/firestore';
 import {
   getAuth,
   signInAnonymously,
@@ -151,9 +143,7 @@ export async function submitContributionToFirebase(contribution) {
 
   const user = await ensureAuthUser();
   const appId =
-    typeof __app_id !== 'undefined' && __app_id
-      ? __app_id
-      : 'default-app-id';
+    typeof __app_id !== 'undefined' && __app_id ? __app_id : 'default-app-id';
 
   const createdAt = new Date();
 
