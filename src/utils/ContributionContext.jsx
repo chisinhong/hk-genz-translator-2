@@ -5,6 +5,7 @@ import React, {
   useMemo,
   useState,
 } from 'react';
+import { submitContributionToFirebase } from '../services/firebaseContributions';
 
 export const CONTRIBUTION_STAGE = {
   IDLE: 'idle',
@@ -17,24 +18,32 @@ export const CONTRIBUTION_STAGE = {
 const ContributionContext = createContext(null);
 
 function persistContributionLocally(contribution) {
+  if (typeof window === 'undefined') {
+    return contribution;
+  }
+
   try {
     const existing = JSON.parse(
       window.localStorage.getItem('user_contributions') || '[]'
     );
     const record = {
-      id: Date.now(),
       ...contribution,
-      createdAt: new Date().toISOString(),
+      id:
+        contribution?.firestoreId ||
+        contribution?.id ||
+        Date.now(),
+      savedAt: new Date().toISOString(),
     };
 
-    existing.unshift(record);
-    if (existing.length > 50) {
-      existing.length = 50;
+    const filtered = existing.filter((item) => item.id !== record.id);
+    filtered.unshift(record);
+    if (filtered.length > 50) {
+      filtered.length = 50;
     }
 
     window.localStorage.setItem(
       'user_contributions',
-      JSON.stringify(existing)
+      JSON.stringify(filtered)
     );
     return record;
   } catch (error) {
@@ -70,9 +79,8 @@ export function ContributionProvider({ children }) {
     setErrorMessage('');
 
     try {
-      // 模擬提交至遠端服務；實際實作可在此接入 Firestore 或 API
-      await new Promise((resolve) => setTimeout(resolve, 600));
-      const record = persistContributionLocally(payload);
+      const submissionResult = await submitContributionToFirebase(payload);
+      const record = persistContributionLocally(submissionResult);
       setLastContribution(record);
       setStage(CONTRIBUTION_STAGE.SUCCESS);
       return { success: true, record };
