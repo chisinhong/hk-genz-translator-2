@@ -13,19 +13,25 @@ import About from './pages/About';
 import { ContributionProvider } from './utils/ContributionContext';
 import { TesterProvider, useTester } from './utils/TesterContext';
 
+const Theme = ({ children }) => (
+  <div className="min-h-screen bg-gradient-to-br from-pink-500 via-purple-600 to-indigo-700 text-white font-sans">
+    <Header />
+    {children}
+    <Footer />
+  </div>
+);
+
 function AppContent() {
   const { showTester } = useTester();
 
   return (
     <>
       <ContributionModal />
-      <Header />
-
       <main className="container mx-auto px-4 py-8 md:py-16 text-center">
-        <AdPlaceholder
+        {/* <AdPlaceholder
           title="頁首橫幅廣告 (e.g. 970x90)"
           className="h-24 mb-8"
-        />
+        /> */}
         {/* Hero Section */}
         <div className="text-center mb-8">
           <h2 className="text-4xl font-bold text-white mb-4">
@@ -42,10 +48,10 @@ function AppContent() {
         {/* 主要翻譯器組件 */}
         <TranslatorWidget />
         <div className="max-w-3xl mx-auto mt-12">
-          <AdPlaceholder
+          {/* <AdPlaceholder
             title="內容區塊廣告 (e.g. 300x250 or Responsive)"
             className="h-64"
-          />
+          /> */}
         </div>
 
         <div className="mt-20">
@@ -68,7 +74,6 @@ function AppContent() {
           </div>
         </div>
       </main>
-      <Footer />
     </>
   );
 }
@@ -78,16 +83,16 @@ function App() {
   return (
     <TesterProvider>
       <ContributionProvider>
-        <div className="min-h-screen bg-gradient-to-br from-pink-500 via-purple-600 to-indigo-700 text-white font-sans">
-          <BrowserRouter className="min-h-screen bg-gradient-to-br from-pink-500 via-purple-600 to-indigo-700 text-white font-sans">
-            <Routes className="min-h-screen bg-gradient-to-br from-pink-500 via-purple-600 to-indigo-700 text-white font-sans">
+        <Theme>
+          <BrowserRouter>
+            <Routes>
               <Route path="/" element={<AppContent />} />
               <Route path="/privacy" element={<PrivacyPolicy />} />
               <Route path="/terms" element={<Terms />} />
               <Route path="/about" element={<About />} />
             </Routes>
           </BrowserRouter>
-        </div>
+        </Theme>
       </ContributionProvider>
     </TesterProvider>
   );

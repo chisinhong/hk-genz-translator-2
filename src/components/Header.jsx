@@ -9,7 +9,9 @@ export default function Header() {
   return (
     <header className="p-4">
       <nav className="container mx-auto flex justify-between items-center">
-        <h1 className="text-2xl font-bold text-white">🇭🇰 GenZ翻譯器</h1>
+        <a href="/">
+          <h1 className="text-2xl font-bold text-white">🇭🇰 GenZ翻譯器</h1>
+        </a>
         <div className="flex items-center gap-3">
           <button
             type="button"
