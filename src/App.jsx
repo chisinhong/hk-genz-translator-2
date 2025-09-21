@@ -1,4 +1,5 @@
 import React from 'react';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import Header from './components/Header';
 import TranslatorWidget from './components/Translator/TranslatorWidget';
 import SimpleTest from './components/SimpleTest';
@@ -6,6 +7,9 @@ import AdPlaceholder from './components/common/AdPlaceholder';
 import StatCard from './components/common/StatCard';
 import Footer from './components/Footer';
 import ContributionModal from './components/Contribution/ContributionModal';
+import PrivacyPolicy from './pages/PrivacyPolicy';
+import Terms from './pages/Terms';
+import About from './pages/About';
 import { ContributionProvider } from './utils/ContributionContext';
 import { TesterProvider, useTester } from './utils/TesterContext';
 
@@ -13,7 +17,7 @@ function AppContent() {
   const { showTester } = useTester();
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-pink-500 via-purple-600 to-indigo-700 text-white font-sans">
+    <>
       <ContributionModal />
       <Header />
 
@@ -65,7 +69,7 @@ function AppContent() {
         </div>
       </main>
       <Footer />
-    </div>
+    </>
   );
 }
 
@@ -74,7 +78,16 @@ function App() {
   return (
     <TesterProvider>
       <ContributionProvider>
-        <AppContent />
+        <div className="min-h-screen bg-gradient-to-br from-pink-500 via-purple-600 to-indigo-700 text-white font-sans">
+          <BrowserRouter className="min-h-screen bg-gradient-to-br from-pink-500 via-purple-600 to-indigo-700 text-white font-sans">
+            <Routes className="min-h-screen bg-gradient-to-br from-pink-500 via-purple-600 to-indigo-700 text-white font-sans">
+              <Route path="/" element={<AppContent />} />
+              <Route path="/privacy" element={<PrivacyPolicy />} />
+              <Route path="/terms" element={<Terms />} />
+              <Route path="/about" element={<About />} />
+            </Routes>
+          </BrowserRouter>
+        </div>
       </ContributionProvider>
     </TesterProvider>
   );

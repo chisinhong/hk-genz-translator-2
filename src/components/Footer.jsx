@@ -24,9 +24,10 @@ export default function Footer() {
     {
       title: '關於我們',
       content: [
-        { type: 'link', label: '關於我們', href: '#' },
+        { type: 'link', label: '關於我們', href: '/about' },
         { type: 'link', label: '聯絡我們', href: '#' },
-        { type: 'link', label: '服務條款', href: '#' },
+        { type: 'link', label: '服務條款', href: '/terms' },
+        { type: 'link', label: '隱私政策', href: '/privacy' },
       ],
     },
     {
