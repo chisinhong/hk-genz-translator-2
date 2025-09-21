@@ -1,64 +1,100 @@
 // src/services/geminiAPI.js
 // Gemini API 翻譯服務 - 乾淨版本
 
+import { GoogleGenAI } from '@google/genai';
+
 class GeminiTranslationService {
   constructor() {
     this.apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-    this.baseURL =
-      'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent';
+    this.modelName =
+      import.meta.env.VITE_GEMINI_MODEL || 'gemini-2.5-flash-lite';
+    this.defaultGenerationConfig = {
+      temperature: 0.7,
+      topK: 40,
+      topP: 0.95,
+      maxOutputTokens: 1000,
+      stopSequences: [],
+    };
+    this.aiClient = this.apiKey
+      ? new GoogleGenAI({ apiKey: this.apiKey })
+      : null;
   }
 
   // 基礎API調用方法
   async callGeminiAPI(prompt, maxTokens = 1000) {
+    if (!this.aiClient) {
+      throw new Error('Gemini API未正確初始化，請檢查API金鑰設定');
+    }
+
     try {
-      const response = await fetch(`${this.baseURL}?key=${this.apiKey}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                {
-                  text: prompt,
-                },
-              ],
-            },
-          ],
-          generationConfig: {
-            temperature: 0.7,
-            topK: 40,
-            topP: 0.95,
-            maxOutputTokens: maxTokens,
-            stopSequences: [],
+      const response = await this.aiClient.models.generateContent({
+        model: this.modelName,
+        contents: [
+          {
+            role: 'user',
+            parts: [{ text: prompt }],
           },
-        }),
+        ],
+        generationConfig: {
+          ...this.defaultGenerationConfig,
+          maxOutputTokens: maxTokens,
+        },
       });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(
-          `Gemini API請求失敗: ${response.status} - ${
-            errorData.error?.message || response.statusText
-          }`
-        );
-      }
+      const text = await this.extractTextFromResponse(response);
 
-      const data = await response.json();
-
-      if (
-        !data.candidates ||
-        !data.candidates[0] ||
-        !data.candidates[0].content
-      ) {
+      if (!text) {
         throw new Error('Gemini API返回了空回應');
       }
 
-      return data.candidates[0].content.parts[0].text;
+      return text;
     } catch (error) {
       console.error('Gemini API調用錯誤:', error);
       throw error;
+    }
+  }
+
+  // 從SDK回應中提取文字
+  async extractTextFromResponse(response) {
+    if (!response) return '';
+
+    if (typeof response.text === 'function') {
+      const text = await response.text();
+      if (text) return text.trim();
+    }
+
+    if (typeof response.text === 'string') {
+      return response.text.trim();
+    }
+
+    const innerResponse = response.response;
+    if (innerResponse && innerResponse !== response) {
+      const nestedText = await this.extractTextFromResponse(innerResponse);
+      if (nestedText) return nestedText;
+    }
+
+    const candidates = response.candidates || innerResponse?.candidates || [];
+
+    for (const candidate of candidates) {
+      const parts = candidate?.content?.parts || [];
+      const textParts = parts
+        .map((part) => part?.text)
+        .filter(Boolean)
+        .map((part) => part.trim());
+
+      if (textParts.length) {
+        return textParts.join('\n');
+      }
+    }
+
+    return '';
+  }
+
+  // 手動切換模型名稱
+  setModel(modelName) {
+    if (modelName) {
+      this.modelName = modelName;
+      console.log = modelName;
     }
   }
 
