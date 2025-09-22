@@ -27,6 +27,7 @@ class GeminiTranslationService {
     }
 
     try {
+      console.log('[Gemini API] 使用模型版本:', this.modelName);
       const response = await this.aiClient.models.generateContent({
         model: this.modelName,
         contents: [
@@ -94,7 +95,7 @@ class GeminiTranslationService {
   setModel(modelName) {
     if (modelName) {
       this.modelName = modelName;
-      console.log = modelName;
+      console.log('[Gemini API] 切換模型版本:', modelName);
     }
   }
 
