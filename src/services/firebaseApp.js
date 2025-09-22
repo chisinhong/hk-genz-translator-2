@@ -1,6 +1,7 @@
 /* global __firebase_config, __initial_auth_token, __app_id */
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getFirestore } from 'firebase/firestore';
+import { getFunctions } from 'firebase/functions';
 import {
   getAuth,
   signInAnonymously,
@@ -11,6 +12,7 @@ import {
 let firebaseApp;
 let firestoreDb;
 let firebaseAuth;
+let firebaseFunctions;
 let authReadyPromise;
 
 function parseFirebaseConfig(rawConfig) {
@@ -57,7 +59,11 @@ function resolveFirebaseConfig() {
 
 export function ensureFirebaseApp() {
   if (firebaseApp && firestoreDb && firebaseAuth) {
-    return { app: firebaseApp, db: firestoreDb, auth: firebaseAuth };
+    return {
+      app: firebaseApp,
+      db: firestoreDb,
+      auth: firebaseAuth,
+    };
   }
 
   const config = resolveFirebaseConfig();
@@ -75,11 +81,25 @@ export function ensureFirebaseApp() {
     firestoreDb = getFirestore(firebaseApp);
     firebaseAuth = getAuth(firebaseApp);
 
-    return { app: firebaseApp, db: firestoreDb, auth: firebaseAuth };
+    return {
+      app: firebaseApp,
+      db: firestoreDb,
+      auth: firebaseAuth,
+    };
   } catch (error) {
     console.error('初始化 Firebase 失敗:', error);
     throw new Error('初始化 Firebase 失敗。');
   }
+}
+
+export function getFirebaseFunctions() {
+  const { app } = ensureFirebaseApp();
+
+  if (!firebaseFunctions) {
+    firebaseFunctions = getFunctions(app);
+  }
+
+  return firebaseFunctions;
 }
 
 export async function ensureAuthUser() {

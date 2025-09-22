@@ -7,11 +7,9 @@ import React, {
   useMemo,
   useState,
 } from 'react';
-import {
-  fetchTodayUsage,
-  incrementTodayUsage,
-} from '../services/firebaseUsage';
+import { fetchTodayUsage } from '../services/firebaseUsage';
 import { isFirebaseConfigured } from '../services/firebaseApp';
+import { validateUsageQuota } from '../services/quotaService';
 
 const DEFAULT_DAILY_LIMIT = 10;
 const LOCAL_STORAGE_KEY = 'translation_usage_daily';
@@ -175,28 +173,76 @@ export function TranslationUsageProvider({
   }, []);
 
   const registerTranslationAttempt = useCallback(async () => {
-    if (state.translationCount >= state.dailyLimit) {
+    if (
+      state.storageMode === 'local' &&
+      state.translationCount >= state.dailyLimit
+    ) {
       return { allowed: false, reason: 'limit-reached' };
     }
 
+    const currentCount = state.translationCount;
+    const configuredLimit = state.dailyLimit;
+
     if (state.storageMode === 'remote') {
       try {
-        await incrementTodayUsage();
-        writeLocalUsageCount(state.translationCount + 1);
+        const quotaResult = await validateUsageQuota({
+          limitType: 'daily',
+          requested: 1,
+          consume: true,
+        });
+
+        writeLocalUsageCount(quotaResult.usage);
         setState((prev) => ({
           ...prev,
-          translationCount: prev.translationCount + 1,
+          translationCount: quotaResult.usage,
+          dailyLimit: Number.isFinite(quotaResult.limit)
+            ? quotaResult.limit
+            : prev.dailyLimit,
           error: null,
         }));
         return {
           allowed: true,
           storageMode: 'remote',
-          translationCount: state.translationCount + 1,
+          translationCount: quotaResult.usage,
           userId: state.userId,
+          quota: quotaResult,
         };
       } catch (error) {
-        console.error('遠端記錄翻譯次數失敗，改用本地計數:', error);
-        const localCount = writeLocalUsageCount(state.translationCount + 1);
+        if (error?.code === 'resource-exhausted') {
+          const details = error.details || {};
+          const enforcedCount = Number.isFinite(details.currentCount)
+            ? details.currentCount
+            : currentCount;
+
+          writeLocalUsageCount(enforcedCount);
+          setState((prev) => ({
+            ...prev,
+            translationCount: enforcedCount,
+            dailyLimit: Number.isFinite(details.limit)
+              ? details.limit
+              : prev.dailyLimit,
+            error: '已達每日翻譯上限。',
+          }));
+
+          return {
+            allowed: false,
+            storageMode: 'remote',
+            reason: 'quota-exceeded',
+            quota: {
+              remaining: Number.isFinite(details.remaining)
+                ? details.remaining
+                : Math.max(configuredLimit - enforcedCount, 0),
+              limit: Number.isFinite(details.limit)
+                ? details.limit
+                : configuredLimit,
+              limitType: details.limitType || 'daily',
+              currentCount: enforcedCount,
+            },
+          };
+        }
+
+        console.error('遠端配額驗證失敗，改用本地計數:', error);
+        const localCount = writeLocalUsageCount(currentCount + 1);
         setState((prev) => ({
           ...prev,
           translationCount: localCount,
@@ -212,7 +258,7 @@ export function TranslationUsageProvider({
       }
     }
 
-    const nextCount = writeLocalUsageCount(state.translationCount + 1);
+    const nextCount = writeLocalUsageCount(currentCount + 1);
     setState((prev) => ({
       ...prev,
       translationCount: nextCount,

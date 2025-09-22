@@ -25,6 +25,7 @@ const TranslatorWidget = () => {
   const [confidence, setConfidence] = useState(0);
   const [copySuccess, setCopySuccess] = useState(false);
   const [copiedTranslationIndex, setCopiedTranslationIndex] = useState(null);
+  const [quotaDetails, setQuotaDetails] = useState(null);
 
   // 使用統計
   const {
@@ -35,7 +36,10 @@ const TranslatorWidget = () => {
     storageMode,
     isLoading: isUsageLoading,
     registerTranslationAttempt,
+    refreshUsage,
   } = useTranslationUsage();
+
+  const upgradeUrl = import.meta.env.VITE_UPGRADE_URL || '/upgrade';
 
   // 引用
   const inputRef = useRef(null);
@@ -47,6 +51,10 @@ const TranslatorWidget = () => {
     { value: 'genz-to-90s', label: 'GenZ潮語 → 90後潮語', emoji: '💿' },
     { value: 'all-to-genz', label: '全部 → GenZ潮語', emoji: '⚡' },
   ];
+
+  const limitTypeLabels = {
+    daily: '每日',
+  };
 
   const inputLabels = {
     'genz-to-normal': '輸入GenZ潮語',
@@ -119,7 +127,7 @@ const TranslatorWidget = () => {
       return;
     }
 
-    if (isLimitReached) {
+    if (isLimitReached && storageMode === 'local') {
       setError(`今日翻譯次數已達上限 (${dailyLimit}次)，請明天再試或升級會員`);
       return;
     }
@@ -132,25 +140,46 @@ const TranslatorWidget = () => {
     setConfidence(0);
     setCopySuccess(false);
     setCopiedTranslationIndex(null);
+    setQuotaDetails(null);
 
     try {
       const usageResult = await registerTranslationAttempt();
       if (!usageResult.allowed) {
         setIsLoading(false);
-        setError(
-          `今日翻譯次數已達上限 (${dailyLimit}次)，請明天再試或升級會員`
-        );
+        if (usageResult.reason === 'quota-exceeded') {
+          const limit = usageResult.quota?.limit ?? dailyLimit;
+          const remaining = usageResult.quota?.remaining ?? 0;
+          const limitType = usageResult.quota?.limitType || 'daily';
+
+          setQuotaDetails({
+            limit,
+            remaining,
+            limitType,
+            currentCount:
+              usageResult.quota?.currentCount ?? translationCount ?? limit,
+          });
+          setError(
+            `今日翻譯次數已達上限 (${limit}次)，請明天再試或升級會員`
+          );
+        } else {
+          setQuotaDetails(null);
+          setError(
+            `今日翻譯次數已達上限 (${dailyLimit}次)，請明天再試或升級會員`
+          );
+        }
         return;
       }
+
+      const appliedLimit = usageResult.quota?.limit ?? dailyLimit;
+      const remainingAfterAttempt =
+        usageResult.quota?.remaining ??
+        Math.max(appliedLimit - usageResult.translationCount, 0);
 
       trackTranslationAttempt(translationType, {
         usage_mode: usageResult.storageMode,
         count_after_attempt: usageResult.translationCount,
-        daily_limit: dailyLimit,
-        remaining_after_attempt: Math.max(
-          dailyLimit - usageResult.translationCount,
-          0
-        ),
+        daily_limit: appliedLimit,
+        remaining_after_attempt: remainingAfterAttempt,
         user_id: usageResult.userId || 'local-fallback',
       });
 
@@ -215,6 +244,7 @@ const TranslatorWidget = () => {
       }
 
       setError(displayMessage);
+      setQuotaDetails(null);
     } finally {
       setIsLoading(false);
     }
@@ -226,7 +256,21 @@ const TranslatorWidget = () => {
     setError('');
     setOutputText('');
     setExplanation('');
+    setConfidence(0);
+    setCopySuccess(false);
     setCopiedTranslationIndex(null);
+    setQuotaDetails(null);
+  };
+
+  const handleTranslationTypeChange = (value) => {
+    setTranslationType(value);
+    setError('');
+    setOutputText('');
+    setExplanation('');
+    setConfidence(0);
+    setCopySuccess(false);
+    setCopiedTranslationIndex(null);
+    setQuotaDetails(null);
   };
 
   // 複製到剪貼板
@@ -274,6 +318,7 @@ const TranslatorWidget = () => {
     setConfidence(0);
     setCopySuccess(false);
     setCopiedTranslationIndex(null);
+    setQuotaDetails(null);
     inputRef.current?.focus();
   };
 
@@ -291,6 +336,39 @@ const TranslatorWidget = () => {
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.lang = 'zh-HK';
       speechSynthesis.speak(utterance);
+    }
+  };
+
+  const handleQuotaRetry = async () => {
+    const usageStatus = await refreshUsage();
+    const refreshedCount =
+      usageStatus?.translationCount ?? translationCount;
+    const mode = usageStatus?.storageMode ?? storageMode;
+
+    if (!inputText.trim()) {
+      return;
+    }
+
+    if (mode === 'remote' || refreshedCount < dailyLimit) {
+      setQuotaDetails(null);
+      setError('');
+      await handleTranslate();
+    } else {
+      setQuotaDetails((prev) => ({
+        limit: dailyLimit,
+        remaining: Math.max(dailyLimit - refreshedCount, 0),
+        limitType: prev?.limitType || 'daily',
+        currentCount: refreshedCount,
+      }));
+      setError(
+        `今日翻譯次數已達上限 (${dailyLimit}次)，請明天再試或升級會員`
+      );
+    }
+  };
+
+  const handleUpgradeClick = () => {
+    if (upgradeUrl) {
+      window.open(upgradeUrl, '_blank', 'noopener');
     }
   };
 
@@ -342,7 +420,7 @@ const TranslatorWidget = () => {
           {translationTypes.map((type) => (
             <button
               key={type.value}
-              onClick={() => setTranslationType(type.value)}
+              onClick={() => handleTranslationTypeChange(type.value)}
               className={`px-4 py-2 rounded-lg font-medium transition-all duration-200 ${
                 translationType === type.value
                   ? 'bg-white text-purple-600 shadow-lg transform scale-105'
@@ -496,9 +574,42 @@ const TranslatorWidget = () => {
 
         {/* 錯誤提示 */}
         {error && (
-          <div className="mt-4 p-3 bg-red-500/20 border border-red-500/30 rounded-lg flex items-center gap-2">
-            <AlertCircle size={16} className="text-red-400 flex-shrink-0" />
-            <span className="text-red-300">{error}</span>
+          <div className="mt-4 p-3 bg-red-500/20 border border-red-500/30 rounded-lg flex flex-col gap-3">
+            <div className="flex items-start gap-2">
+              <AlertCircle size={16} className="text-red-400 flex-shrink-0" />
+              <div>
+                <span className="text-red-300 block">{error}</span>
+                {quotaDetails && (
+                  <p className="text-red-200 text-xs mt-1">
+                    剩餘翻譯次數：{quotaDetails.remaining} / {quotaDetails.limit}（
+                    {limitTypeLabels[quotaDetails.limitType] ||
+                      quotaDetails.limitType}
+                    配額）
+                  </p>
+                )}
+              </div>
+            </div>
+            {quotaDetails && (
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={handleQuotaRetry}
+                  disabled={isLoading || !inputText.trim()}
+                  className="flex items-center gap-1 px-3 py-1 bg-white/20 hover:bg-white/30 rounded-lg text-white text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <RefreshCw size={14} />
+                  重試翻譯
+                </button>
+                <button
+                  type="button"
+                  onClick={handleUpgradeClick}
+                  className="flex items-center gap-1 px-3 py-1 bg-purple-500/80 hover:bg-purple-500 rounded-lg text-white text-sm transition-colors"
+                >
+                  <Sparkles size={14} />
+                  升級會員
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -507,7 +618,10 @@ const TranslatorWidget = () => {
           <button
             onClick={handleTranslate}
             disabled={
-              isLoading || !inputText.trim() || isLimitReached || isUsageLoading
+              isLoading ||
+              !inputText.trim() ||
+              (storageMode === 'local' && isLimitReached) ||
+              isUsageLoading
             }
             className="bg-gradient-to-r from-blue-500 to-purple-600 text-white px-8 py-3 rounded-xl font-bold hover:opacity-90 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 mx-auto"
           >
@@ -519,7 +633,9 @@ const TranslatorWidget = () => {
             ) : (
               <>
                 <ArrowLeftRight size={20} />
-                {isLimitReached ? '已達每日限額' : 'AI智能翻譯'}
+                {storageMode === 'local' && isLimitReached
+                  ? '已達每日限額'
+                  : 'AI智能翻譯'}
               </>
             )}
           </button>
