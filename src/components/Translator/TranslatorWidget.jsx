@@ -44,17 +44,52 @@ const TranslatorWidget = () => {
     { value: 'genz-to-normal', label: 'GenZ潮語 → 正常廣東話', emoji: '🎯' },
     { value: 'genz-to-80s', label: 'GenZ潮語 → 80後潮語', emoji: '📼' },
     { value: 'genz-to-90s', label: 'GenZ潮語 → 90後潮語', emoji: '💿' },
+    { value: 'all-to-genz', label: '全部 → GenZ潮語', emoji: '⚡' },
   ];
 
+  const inputLabels = {
+    'genz-to-normal': '輸入GenZ潮語',
+    'genz-to-80s': '輸入GenZ潮語',
+    'genz-to-90s': '輸入GenZ潮語',
+    'all-to-genz': '輸入正常/舊式用語',
+  };
+
+  const inputPlaceholders = {
+    'genz-to-normal': '例如：今日想躺平...',
+    'genz-to-80s': '例如：好想chill一chill...',
+    'genz-to-90s': '例如：今晚一齊打機...',
+    'all-to-genz': '例如：今晚去飲茶...',
+  };
+
   // 快速示例
-  const quickExamples = [
-    '今日想躺平',
-    '好emo啊',
-    '芭比Q了',
-    'YYDS',
-    '整活時間',
-    '社死現場',
-  ];
+  const quickExamples = {
+    'genz-to-normal': [
+      '今日想躺平',
+      '好emo啊',
+      '芭比Q了',
+      'YYDS',
+      '整活時間',
+      '社死現場',
+    ],
+    'genz-to-80s': [
+      '今日想躺平',
+      '這件事好炸裂',
+      '今晚chill住睇戲',
+      '我要打卡這間咖啡店',
+    ],
+    'genz-to-90s': [
+      '好emo啊',
+      '這個人是yyds',
+      '整活時間',
+      '這個穿搭很有氛圍感',
+    ],
+    'all-to-genz': [
+      '今晚去飲茶',
+      '真係好攰',
+      '你今天心情不好嗎',
+      '這個造型很時髦',
+    ],
+  };
 
   // 載入每日使用統計
   // 錯誤處理函數
@@ -99,7 +134,9 @@ const TranslatorWidget = () => {
       const usageResult = await registerTranslationAttempt();
       if (!usageResult.allowed) {
         setIsLoading(false);
-        setError(`今日翻譯次數已達上限 (${dailyLimit}次)，請明天再試或升級會員`);
+        setError(
+          `今日翻譯次數已達上限 (${dailyLimit}次)，請明天再試或升級會員`
+        );
         return;
       }
 
@@ -294,7 +331,7 @@ const TranslatorWidget = () => {
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <label className="block text-white font-medium">
-                輸入GenZ潮語
+                {inputLabels[translationType] || '輸入要翻譯的文字'}
               </label>
               <span className="text-white/60 text-sm">
                 {inputText.length}/500
@@ -306,7 +343,9 @@ const TranslatorWidget = () => {
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="例如：今日想躺平..."
+              placeholder={
+                inputPlaceholders[translationType] || '例如：今日想躺平...'
+              }
               className="w-full h-32 p-4 rounded-lg bg-white/20 text-white placeholder-white/60 border border-white/30 focus:outline-none focus:ring-2 focus:ring-white/50 focus:border-transparent resize-none transition-all duration-200"
               disabled={isLoading}
             />
@@ -408,10 +447,7 @@ const TranslatorWidget = () => {
           <button
             onClick={handleTranslate}
             disabled={
-              isLoading ||
-              !inputText.trim() ||
-              isLimitReached ||
-              isUsageLoading
+              isLoading || !inputText.trim() || isLimitReached || isUsageLoading
             }
             className="bg-gradient-to-r from-blue-500 to-purple-600 text-white px-8 py-3 rounded-xl font-bold hover:opacity-90 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 mx-auto"
           >
@@ -438,7 +474,9 @@ const TranslatorWidget = () => {
           ⚡ 快速試用
         </h3>
         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-          {quickExamples.map((example, index) => (
+          {(
+            quickExamples[translationType] || quickExamples['genz-to-normal']
+          ).map((example, index) => (
             <button
               key={index}
               onClick={() => handleQuickExample(example)}
@@ -452,7 +490,7 @@ const TranslatorWidget = () => {
 
         <div className="mt-4 text-center">
           <p className="text-white/70 text-sm">
-            💡 點擊上方例子快速體驗翻譯功能
+            💡 例句會因應目前翻譯模式而更新，點擊立即體驗
           </p>
         </div>
       </div>

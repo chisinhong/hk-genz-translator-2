@@ -140,6 +140,23 @@ class GeminiTranslationService {
   "explanation": "解釋兩個年代表達的差異",
   "confidence": 0.8
 }`,
+
+      'all-to-genz': `你是一位擅長創作香港GenZ潮語的語言專家。請將以下正常或舊式廣東話表達轉換成貼地的GenZ潮語，並提供簡短解釋。
+
+輸入文字：「${text}」
+
+請嚴格按照以下JSON格式回答，不要添加其他描述：
+{
+  "translation": "GenZ潮語的講法",
+  "explanation": "解釋轉換後語句的語氣、情境或源頭",
+  "confidence": 0.8
+}
+
+注意：
+- 保持香港本地文化語境
+- 用字要貼近GenZ網絡用語
+- 如內容已十分潮，可以指出維持原狀的原因
+- 必須返回有效的JSON格式`,
     };
 
     const prompt = prompts[translationType] || prompts['genz-to-normal'];
@@ -273,6 +290,24 @@ class GeminiTranslationService {
         很好: {
           translation: '好正',
           explanation: '90年代用「好正」來表達很棒',
+        },
+      },
+      'all-to-genz': {
+        好累: {
+          translation: '好攰想躺平',
+          explanation: '用躺平凸顯GenZ對疲倦的自嘲語氣',
+        },
+        很棒: {
+          translation: '直接封神',
+          explanation: '封神是GenZ用語，表示極度厲害',
+        },
+        今晚去飲茶: {
+          translation: '今晚約個宵夜局',
+          explanation: '用「開局」帶出GenZ常見的聚會講法',
+        },
+        你今天心情不好嗎: {
+          translation: '你今日emo緊？',
+          explanation: '用emo表達心情低落，帶GenZ語感',
         },
       },
     };
