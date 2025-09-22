@@ -1,5 +1,5 @@
 // src/components/Translator/TranslatorWidget.jsx
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useMemo } from 'react';
 import {
   ArrowLeftRight,
   Copy,
@@ -24,6 +24,7 @@ const TranslatorWidget = () => {
   const [error, setError] = useState('');
   const [confidence, setConfidence] = useState(0);
   const [copySuccess, setCopySuccess] = useState(false);
+  const [copiedTranslationIndex, setCopiedTranslationIndex] = useState(null);
 
   // 使用統計
   const {
@@ -129,6 +130,8 @@ const TranslatorWidget = () => {
     setOutputText('');
     setExplanation('');
     setConfidence(0);
+    setCopySuccess(false);
+    setCopiedTranslationIndex(null);
 
     try {
       const usageResult = await registerTranslationAttempt();
@@ -223,6 +226,7 @@ const TranslatorWidget = () => {
     setError('');
     setOutputText('');
     setExplanation('');
+    setCopiedTranslationIndex(null);
   };
 
   // 複製到剪貼板
@@ -244,6 +248,23 @@ const TranslatorWidget = () => {
     }
   };
 
+  const handleCopySingleTranslation = async (text, index) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedTranslationIndex(index);
+      setTimeout(() => setCopiedTranslationIndex(null), 2000);
+    } catch {
+      const textArea = document.createElement('textarea');
+      textArea.value = text;
+      document.body.appendChild(textArea);
+      textArea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textArea);
+      setCopiedTranslationIndex(index);
+      setTimeout(() => setCopiedTranslationIndex(null), 2000);
+    }
+  };
+
   // 清空輸入
   const handleClear = () => {
     setInputText('');
@@ -251,6 +272,8 @@ const TranslatorWidget = () => {
     setExplanation('');
     setError('');
     setConfidence(0);
+    setCopySuccess(false);
+    setCopiedTranslationIndex(null);
     inputRef.current?.focus();
   };
 
@@ -277,6 +300,14 @@ const TranslatorWidget = () => {
     if (conf >= 0.6) return 'text-yellow-600';
     return 'text-red-600';
   };
+
+  const formattedTranslations = useMemo(() => {
+    if (!outputText) return [];
+    return outputText
+      .split(/\n+/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }, [outputText]);
 
   return (
     <div className="w-full max-w-4xl mx-auto">
@@ -389,8 +420,37 @@ const TranslatorWidget = () => {
                     AI正在思考中...
                   </div>
                 ) : outputText ? (
-                  <div>
-                    <p className="mb-2">{outputText}</p>
+                  <div className="space-y-3">
+                    <div className="space-y-2">
+                      {formattedTranslations.map((line, index) => (
+                        <div
+                          key={`${line}-${index}`}
+                          className="flex items-start gap-3 bg-white/5 rounded-lg px-3 py-2"
+                        >
+                          <span className="flex-1 leading-relaxed text-white">
+                            {line}
+                          </span>
+                          <button
+                            onClick={() =>
+                              handleCopySingleTranslation(line, index)
+                            }
+                            className="flex items-center gap-1 px-2 py-1 bg-white/10 hover:bg-white/20 rounded-md text-white text-xs transition-colors"
+                          >
+                            {copiedTranslationIndex === index ? (
+                              <>
+                                <CheckCircle size={12} />
+                                已複製
+                              </>
+                            ) : (
+                              <>
+                                <Copy size={12} />
+                                複製
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
                     {explanation && (
                       <p className="text-sm text-white/70 italic border-t border-white/20 pt-2">
                         💡 {explanation}
