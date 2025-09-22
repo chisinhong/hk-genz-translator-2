@@ -1,5 +1,5 @@
 // src/components/Translator/TranslatorWidget.jsx
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   ArrowLeftRight,
   Copy,
@@ -11,6 +11,8 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { geminiTranslator } from '../../services/geminiAPI';
+import { useTranslationUsage } from '../../utils/TranslationUsageContext';
+import { trackTranslationAttempt } from '../../utils/analytics';
 
 const TranslatorWidget = () => {
   // 基本狀態
@@ -24,12 +26,18 @@ const TranslatorWidget = () => {
   const [copySuccess, setCopySuccess] = useState(false);
 
   // 使用統計
-  const [translationCount, setTranslationCount] = useState(0);
-  const [dailyLimit] = useState(20); // 免費用戶每日限制
+  const {
+    translationCount,
+    dailyLimit,
+    remainingTranslations,
+    isLimitReached,
+    storageMode,
+    isLoading: isUsageLoading,
+    registerTranslationAttempt,
+  } = useTranslationUsage();
 
   // 引用
   const inputRef = useRef(null);
-  const outputRef = useRef(null);
 
   // 翻譯類型選項
   const translationTypes = [
@@ -49,22 +57,6 @@ const TranslatorWidget = () => {
   ];
 
   // 載入每日使用統計
-  useEffect(() => {
-    const loadDailyCount = () => {
-      try {
-        const today = new Date().toDateString();
-        const dailyData = JSON.parse(
-          localStorage.getItem('daily_count') || '{}'
-        );
-        setTranslationCount(dailyData[today] || 0);
-      } catch (error) {
-        console.error('載入每日統計失敗:', error);
-      }
-    };
-
-    loadDailyCount();
-  }, []);
-
   // 錯誤處理函數
   const getErrorMessage = (error) => {
     if (error instanceof Error) {
@@ -77,8 +69,6 @@ const TranslatorWidget = () => {
   };
 
   // 檢查是否達到每日限制
-  const isAtDailyLimit = translationCount >= dailyLimit;
-
   // 主翻譯函數
   const handleTranslate = async () => {
     // 基本驗證
@@ -93,7 +83,7 @@ const TranslatorWidget = () => {
       return;
     }
 
-    if (isAtDailyLimit) {
+    if (isLimitReached) {
       setError(`今日翻譯次數已達上限 (${dailyLimit}次)，請明天再試或升級會員`);
       return;
     }
@@ -106,6 +96,24 @@ const TranslatorWidget = () => {
     setConfidence(0);
 
     try {
+      const usageResult = await registerTranslationAttempt();
+      if (!usageResult.allowed) {
+        setIsLoading(false);
+        setError(`今日翻譯次數已達上限 (${dailyLimit}次)，請明天再試或升級會員`);
+        return;
+      }
+
+      trackTranslationAttempt(translationType, {
+        usage_mode: usageResult.storageMode,
+        count_after_attempt: usageResult.translationCount,
+        daily_limit: dailyLimit,
+        remaining_after_attempt: Math.max(
+          dailyLimit - usageResult.translationCount,
+          0
+        ),
+        user_id: usageResult.userId || 'local-fallback',
+      });
+
       console.log('開始翻譯:', inputText, translationType);
 
       const result = await geminiTranslator.translateSlang(
@@ -121,18 +129,8 @@ const TranslatorWidget = () => {
       setConfidence(result.confidence);
 
       // 更新統計
-      const newCount = translationCount + 1;
-      setTranslationCount(newCount);
-
       // 保存到本地存儲
       try {
-        const today = new Date().toDateString();
-        const dailyData = JSON.parse(
-          localStorage.getItem('daily_count') || '{}'
-        );
-        dailyData[today] = newCount;
-        localStorage.setItem('daily_count', JSON.stringify(dailyData));
-
         // 保存翻譯歷史
         const historyItem = {
           id: Date.now(),
@@ -196,7 +194,7 @@ const TranslatorWidget = () => {
       await navigator.clipboard.writeText(text);
       setCopySuccess(true);
       setTimeout(() => setCopySuccess(false), 2000);
-    } catch (error) {
+    } catch {
       // 備援方法
       const textArea = document.createElement('textarea');
       textArea.value = text;
@@ -253,11 +251,18 @@ const TranslatorWidget = () => {
           <Sparkles className="text-yellow-400" />
         </h2>
         <p className="text-white/80">
-          已翻譯 {translationCount}/{dailyLimit} 次
-          {isAtDailyLimit && (
+          {isUsageLoading
+            ? '載入使用狀態中...'
+            : `已翻譯 ${translationCount}/${dailyLimit} 次，剩餘 ${remainingTranslations} 次`}
+          {!isUsageLoading && isLimitReached && (
             <span className="text-red-300 ml-2">今日限額已用完</span>
           )}
         </p>
+        {!isUsageLoading && storageMode === 'local' && (
+          <p className="text-yellow-200 text-xs mt-2">
+            目前使用離線計數，恢復連線後將會自動同步。
+          </p>
+        )}
       </div>
 
       {/* 翻譯類型選擇器 */}
@@ -402,7 +407,12 @@ const TranslatorWidget = () => {
         <div className="mt-6 text-center">
           <button
             onClick={handleTranslate}
-            disabled={isLoading || !inputText.trim() || isAtDailyLimit}
+            disabled={
+              isLoading ||
+              !inputText.trim() ||
+              isLimitReached ||
+              isUsageLoading
+            }
             className="bg-gradient-to-r from-blue-500 to-purple-600 text-white px-8 py-3 rounded-xl font-bold hover:opacity-90 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 mx-auto"
           >
             {isLoading ? (
@@ -413,7 +423,7 @@ const TranslatorWidget = () => {
             ) : (
               <>
                 <ArrowLeftRight size={20} />
-                {isAtDailyLimit ? '已達每日限額' : 'AI智能翻譯'}
+                {isLimitReached ? '已達每日限額' : 'AI智能翻譯'}
               </>
             )}
           </button>

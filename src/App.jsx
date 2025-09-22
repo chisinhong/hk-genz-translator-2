@@ -12,21 +12,22 @@ import Terms from './pages/Terms';
 import About from './pages/About';
 import { ContributionProvider } from './utils/ContributionContext';
 import { TesterProvider, useTester } from './utils/TesterContext';
+import { TranslationUsageProvider } from './utils/TranslationUsageContext';
 
 const Theme = ({ children }) => (
   <div className="min-h-screen bg-gradient-to-br from-pink-500 via-purple-600 to-indigo-700 text-white font-sans">
-    <Header />
     {children}
-    <Footer />
   </div>
 );
 
 function AppContent() {
   const { showTester } = useTester();
+  const isDevelopment = import.meta.env.MODE === 'development';
 
   return (
     <>
       <ContributionModal />
+      <Header />
       <main className="container mx-auto px-4 py-8 md:py-16 text-center">
         {/* <AdPlaceholder
           title="頁首橫幅廣告 (e.g. 970x90)"
@@ -43,7 +44,7 @@ function AppContent() {
         </div>
 
         {/* 開發測試器 */}
-        {showTester && process.env.NODE_ENV === 'development' && <SimpleTest />}
+        {showTester && isDevelopment && <SimpleTest />}
 
         {/* 主要翻譯器組件 */}
         <TranslatorWidget />
@@ -74,6 +75,7 @@ function AppContent() {
           </div>
         </div>
       </main>
+      <Footer />
     </>
   );
 }
@@ -83,16 +85,18 @@ function App() {
   return (
     <TesterProvider>
       <ContributionProvider>
-        <Theme>
-          <BrowserRouter>
-            <Routes>
-              <Route path="/" element={<AppContent />} />
-              <Route path="/privacy" element={<PrivacyPolicy />} />
-              <Route path="/terms" element={<Terms />} />
-              <Route path="/about" element={<About />} />
-            </Routes>
-          </BrowserRouter>
-        </Theme>
+        <TranslationUsageProvider>
+          <Theme>
+            <BrowserRouter>
+              <Routes>
+                <Route path="/" element={<AppContent />} />
+                <Route path="/privacy" element={<PrivacyPolicy />} />
+                <Route path="/terms" element={<Terms />} />
+                <Route path="/about" element={<About />} />
+              </Routes>
+            </BrowserRouter>
+          </Theme>
+        </TranslationUsageProvider>
       </ContributionProvider>
     </TesterProvider>
   );

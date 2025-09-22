@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components -- Context file exports provider and hook */
 import React, { createContext, useContext, useState } from 'react';
 
 // 建立 Context

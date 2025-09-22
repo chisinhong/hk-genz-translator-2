@@ -5,6 +5,7 @@ import { useTester } from '../utils/TesterContext';
 export default function Header() {
   const { showTester, setShowTester } = useTester();
   const { openModal } = useContribution();
+  const isDevelopment = import.meta.env.MODE === 'development';
 
   return (
     <header className="p-4">
@@ -22,7 +23,7 @@ export default function Header() {
           </button>
 
           {/* 開發測試切換按鈕 (正式版請移除) */}
-          {process.env.NODE_ENV === 'development' && (
+          {isDevelopment && (
             <button
               onClick={() => setShowTester((prev) => !prev)}
               className="bg-yellow-500 hover:bg-yellow-600 text-black px-3 py-1 rounded text-sm font-medium"

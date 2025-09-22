@@ -16,3 +16,10 @@ export const trackTranslation = (inputText, outputText, type, confidence) => {
     source: 'gemini_api',
   });
 };
+
+export const trackTranslationAttempt = (type, metadata = {}) => {
+  trackEvent('translation_attempt', {
+    translation_type: type,
+    ...metadata,
+  });
+};

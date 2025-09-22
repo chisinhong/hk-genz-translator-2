@@ -145,7 +145,7 @@ class GeminiTranslationService {
 
     try {
       const result = await this.callGeminiAPI(prompt);
-      return this.parseTranslationResult(result, translationType);
+      return this.parseTranslationResult(result);
     } catch (error) {
       console.error('Gemini API調用失敗，使用備援翻譯:', error);
       return this.fallbackTranslation(text, translationType);
@@ -153,7 +153,7 @@ class GeminiTranslationService {
   }
 
   // 解析翻譯結果
-  parseTranslationResult(result, translationType) {
+  parseTranslationResult(result) {
     try {
       // 嘗試解析JSON回應
       let jsonResult;
@@ -163,7 +163,7 @@ class GeminiTranslationService {
 
       try {
         jsonResult = JSON.parse(cleanedResult);
-      } catch (parseError) {
+      } catch {
         // 如果JSON解析失敗，嘗試從文本中提取信息
         jsonResult = this.extractFromText(cleanedResult);
       }
