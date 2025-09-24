@@ -24,12 +24,79 @@ import {
   subscribeToUserProfile,
 } from '../services/userProfile';
 
+const BASE_LIMITS = {
+  guest: 3,
+  registered: 10,
+  pro: 200,
+};
+
+const TASK_PERMANENT_REWARD = 5;
+const SHARE_REWARD_PER_USE = 2;
+const SHARE_DAILY_CAP = 10;
+const ISO_DATE_LENGTH = 10;
+
+const DEFAULT_TASKS = {
+  instagram: false,
+  threads: false,
+  submissionsApproved: 0,
+  invitesCompleted: 0,
+  sharesToday: 0,
+  sharesRecordedAt: null,
+};
+
+function createEmptyTasks() {
+  return { ...DEFAULT_TASKS };
+}
+
+function getTodayKey() {
+  return new Date().toISOString().slice(0, ISO_DATE_LENGTH);
+}
+
+function normalizeTasks(rawTasks = {}) {
+  const today = getTodayKey();
+  const merged = { ...createEmptyTasks(), ...rawTasks };
+  const sharesFresh = merged.sharesRecordedAt === today;
+  return {
+    ...merged,
+    sharesToday: sharesFresh ? merged.sharesToday || 0 : 0,
+    sharesRecordedAt: sharesFresh ? today : null,
+  };
+}
+
+function calculatePermanentBoost(tasks) {
+  if (!tasks) return 0;
+  const instagramBoost = tasks.instagram ? TASK_PERMANENT_REWARD : 0;
+  const threadsBoost = tasks.threads ? TASK_PERMANENT_REWARD : 0;
+  const submissionBoost = (tasks.submissionsApproved || 0) * TASK_PERMANENT_REWARD;
+  const inviteBoost = (tasks.invitesCompleted || 0) * TASK_PERMANENT_REWARD;
+  return instagramBoost + threadsBoost + submissionBoost + inviteBoost;
+}
+
+function calculateShareBonus(tasks) {
+  if (!tasks) return 0;
+  const shares = Number.isFinite(tasks.sharesToday) ? tasks.sharesToday : 0;
+  return Math.min(shares * SHARE_REWARD_PER_USE, SHARE_DAILY_CAP);
+}
+
+function defaultTierForUser(user) {
+  if (!user) return 'guest';
+  return user.isAnonymous ? 'guest' : 'registered';
+}
+
+function baseLimitForTier(tier) {
+  return BASE_LIMITS[tier] ?? BASE_LIMITS.guest;
+}
+
 const AuthContext = createContext(null);
 
 const DEFAULT_STATE = {
   user: null,
   tier: 'guest',
-  dailyLimit: 10,
+  baseLimit: BASE_LIMITS.guest,
+  permanentBoost: 0,
+  shareBonus: 0,
+  dailyLimit: BASE_LIMITS.guest,
+  tasks: createEmptyTasks(),
   loading: true,
   actionPending: false,
   error: null,
@@ -37,8 +104,64 @@ const DEFAULT_STATE = {
 
 export const AuthProvider = ({ children }) => {
   const [state, setState] = useState(DEFAULT_STATE);
-  const { user, tier, dailyLimit, loading, actionPending, error } = state;
+  const {
+    user,
+    tier,
+    baseLimit,
+    permanentBoost,
+    shareBonus,
+    dailyLimit,
+    tasks,
+    loading,
+    actionPending,
+    error,
+  } = state;
   const unsubscribeProfileRef = useRef(null);
+
+  const applyProfileData = useCallback((profileData, userOverride = null) => {
+    setState((prev) => {
+      const resolvedUser = userOverride ?? prev.user;
+      const tierFromProfile = profileData?.tier;
+      const resolvedTier = tierFromProfile
+        || defaultTierForUser(resolvedUser)
+        || prev.tier
+        || 'guest';
+
+      const normalizedTasks = normalizeTasks(profileData?.tasks);
+
+      const resolvedBaseLimit = Number.isFinite(profileData?.baseLimit)
+        ? profileData.baseLimit
+        : baseLimitForTier(resolvedTier);
+
+      const resolvedPermanentBoost = Number.isFinite(profileData?.permanentBoost)
+        ? profileData.permanentBoost
+        : calculatePermanentBoost(normalizedTasks);
+
+      const resolvedShareBonus = Number.isFinite(profileData?.shareBonus)
+        ? profileData.shareBonus
+        : calculateShareBonus(normalizedTasks);
+
+      const resolvedDailyLimit = Number.isFinite(profileData?.dailyLimit)
+        ? profileData.dailyLimit
+        : resolvedTier === 'pro'
+          ? BASE_LIMITS.pro
+          : resolvedBaseLimit + resolvedPermanentBoost + resolvedShareBonus;
+
+      return {
+        ...prev,
+        user: resolvedUser ?? prev.user,
+        tier: resolvedTier,
+        baseLimit: resolvedBaseLimit,
+        permanentBoost: resolvedPermanentBoost,
+        shareBonus: resolvedShareBonus,
+        dailyLimit: resolvedDailyLimit,
+        tasks: normalizedTasks,
+        loading: false,
+        actionPending: false,
+        error: null,
+      };
+    });
+  }, []);
 
   useEffect(() => {
     let auth;
@@ -52,7 +175,11 @@ export const AuthProvider = ({ children }) => {
         setState({
           user: null,
           tier: 'guest',
-          dailyLimit: DEFAULT_STATE.dailyLimit,
+          baseLimit: BASE_LIMITS.guest,
+          permanentBoost: 0,
+          shareBonus: 0,
+          dailyLimit: BASE_LIMITS.guest,
+          tasks: createEmptyTasks(),
           loading: false,
           actionPending: false,
           error: initError,
@@ -75,13 +202,7 @@ export const AuthProvider = ({ children }) => {
       if (!uid) return;
       unsubscribeProfileRef.current = subscribeToUserProfile(uid, (profile) => {
         if (!isMounted) return;
-        setState((prev) => ({
-          ...prev,
-          tier: profile?.tier || prev.tier || 'guest',
-          dailyLimit: Number.isFinite(profile?.dailyLimit)
-            ? profile.dailyLimit
-            : prev.dailyLimit,
-        }));
+        applyProfileData(profile);
       });
     };
 
@@ -111,35 +232,21 @@ export const AuthProvider = ({ children }) => {
 
       attachProfileListener(firebaseUser.uid);
 
+      setState((prev) => ({
+        ...prev,
+        user: firebaseUser,
+        loading: true,
+      }));
+
       try {
         const profile = await ensureUserTierProfile();
         if (!isMounted) return;
-        const resolvedTier =
-          profile?.tier || (firebaseUser.isAnonymous ? 'guest' : 'registered');
-        const resolvedLimit = Number.isFinite(profile?.dailyLimit)
-          ? profile.dailyLimit
-          : resolvedTier === 'registered'
-            ? 50
-            : 10;
-        setState({
-          user: firebaseUser,
-          tier: resolvedTier,
-          dailyLimit: resolvedLimit,
-          loading: false,
-          actionPending: false,
-          error: null,
-        });
+        applyProfileData(profile, firebaseUser);
       } catch (profileError) {
         console.error('載入用戶層級失敗:', profileError);
         if (!isMounted) return;
-        setState({
-          user: firebaseUser,
-          tier: firebaseUser.isAnonymous ? 'guest' : 'registered',
-          dailyLimit: firebaseUser.isAnonymous ? 10 : 50,
-          loading: false,
-          actionPending: false,
-          error: profileError,
-        });
+        applyProfileData(null, firebaseUser);
+        setState((prev) => ({ ...prev, error: profileError }));
       }
     };
 
@@ -150,7 +257,7 @@ export const AuthProvider = ({ children }) => {
       unsubscribe();
       cleanupProfileSubscription();
     };
-  }, []);
+  }, [applyProfileData]);
 
   const setActionState = useCallback((pending, actionError = null) => {
     setState((prev) => ({
@@ -174,26 +281,15 @@ export const AuthProvider = ({ children }) => {
     try {
       await signInWithEmailAndPassword(auth, trimmedEmail, trimmedPassword);
       const profile = await ensureUserTierProfile();
-      const resolvedTier = profile?.tier || 'registered';
-      const resolvedLimit = Number.isFinite(profile?.dailyLimit)
-        ? profile.dailyLimit
-        : resolvedTier === 'registered'
-          ? 50
-          : 10;
-      setState((prev) => ({
-        ...prev,
-        tier: resolvedTier,
-        dailyLimit: resolvedLimit,
-        actionPending: false,
-        error: null,
-      }));
+      applyProfileData(profile);
+      setActionState(false, null);
       return { success: true };
     } catch (signInError) {
       console.error('登入失敗:', signInError);
       setActionState(false, signInError);
       return { success: false, error: signInError };
     }
-  }, [setActionState]);
+  }, [setActionState, applyProfileData]);
 
   const register = useCallback(
     async (email, password, displayName) => {
@@ -237,19 +333,8 @@ export const AuthProvider = ({ children }) => {
         }
 
         const profile = await ensureUserTierProfile();
-        const resolvedTier = profile?.tier || 'registered';
-        const resolvedLimit = Number.isFinite(profile?.dailyLimit)
-          ? profile.dailyLimit
-          : resolvedTier === 'registered'
-            ? 50
-            : 10;
-        setState((prev) => ({
-          ...prev,
-          tier: resolvedTier,
-          dailyLimit: resolvedLimit,
-          actionPending: false,
-          error: null,
-        }));
+        applyProfileData(profile, credentialUser);
+        setActionState(false, null);
 
         return { success: true };
       } catch (registerError) {
@@ -258,7 +343,7 @@ export const AuthProvider = ({ children }) => {
         return { success: false, error: registerError };
       }
     },
-    [setActionState]
+    [setActionState, applyProfileData]
   );
 
   const signOutUser = useCallback(async () => {
@@ -266,7 +351,18 @@ export const AuthProvider = ({ children }) => {
     setActionState(true);
     try {
       await signOut(auth);
-      setState({ ...DEFAULT_STATE, loading: false });
+      setState({
+        user: null,
+        tier: 'guest',
+        baseLimit: BASE_LIMITS.guest,
+        permanentBoost: 0,
+        shareBonus: 0,
+        dailyLimit: BASE_LIMITS.guest,
+        tasks: createEmptyTasks(),
+        loading: false,
+        actionPending: false,
+        error: null,
+      });
       await signInAnonymously(auth);
       return { success: true };
     } catch (signOutError) {
@@ -276,11 +372,27 @@ export const AuthProvider = ({ children }) => {
     }
   }, [setActionState]);
 
+  const refreshProfile = useCallback(async () => {
+    try {
+      const profile = await ensureUserTierProfile();
+      applyProfileData(profile);
+      return { success: true, profile };
+    } catch (refreshError) {
+      console.error('重新整理會員資料失敗:', refreshError);
+      setState((prev) => ({ ...prev, error: refreshError }));
+      return { success: false, error: refreshError };
+    }
+  }, [applyProfileData]);
+
   const value = useMemo(
     () => ({
       user,
       tier,
+      baseLimit,
+      permanentBoost,
+      shareBonus,
       dailyLimit,
+      tasks,
       loading,
       actionPending,
       error,
@@ -288,17 +400,25 @@ export const AuthProvider = ({ children }) => {
       register,
       signOut: signOutUser,
       isAnonymous: user?.isAnonymous ?? true,
+      applyRemoteProfile: applyProfileData,
+      refreshProfile,
     }),
     [
       user,
       tier,
+      baseLimit,
+      permanentBoost,
+      shareBonus,
       dailyLimit,
+      tasks,
       loading,
       actionPending,
       error,
       signIn,
       register,
       signOutUser,
+      applyProfileData,
+      refreshProfile,
     ]
   );
 

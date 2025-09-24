@@ -12,7 +12,10 @@ import { isFirebaseConfigured } from '../services/firebaseApp';
 import { validateUsageQuota } from '../services/quotaService';
 import { useAuth } from './AuthContext';
 
-const DEFAULT_DAILY_LIMIT = 10;
+const GUEST_LIMIT = 3;
+const REGISTERED_LIMIT = 10;
+const PRO_LIMIT = 200;
+const DEFAULT_DAILY_LIMIT = GUEST_LIMIT;
 const LOCAL_STORAGE_KEY = 'translation_usage_daily';
 
 function getTodayKey() {
@@ -301,15 +304,16 @@ export function TranslationUsageProvider({
     state.dailyLimit,
     state.storageMode,
     user,
-    authDailyLimit,
   ]);
 
   useEffect(() => {
     const targetLimit = Number.isFinite(authDailyLimit)
       ? authDailyLimit
-      : tier === 'registered'
-        ? 50
-        : DEFAULT_DAILY_LIMIT;
+      : tier === 'pro'
+        ? PRO_LIMIT
+        : tier === 'registered'
+          ? REGISTERED_LIMIT
+          : GUEST_LIMIT;
 
     setState((prev) => ({
       ...prev,

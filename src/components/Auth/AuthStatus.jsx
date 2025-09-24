@@ -9,6 +9,12 @@ const initialForm = {
   displayName: '',
 };
 
+const TIER_LABELS = {
+  guest: '訪客',
+  registered: '註冊會員',
+  pro: '專業版',
+};
+
 const AuthStatus = () => {
   const {
     user,
@@ -27,6 +33,8 @@ const AuthStatus = () => {
   const [mode, setMode] = useState('signIn');
   const [formState, setFormState] = useState(initialForm);
   const [message, setMessage] = useState('');
+
+  const tierLabel = TIER_LABELS[tier] || TIER_LABELS.guest;
 
   const togglePanel = () => {
     if (loading) return;
@@ -202,8 +210,7 @@ const AuthStatus = () => {
               {user.displayName || user.email || '已登入用戶'}
             </span>
             <span className="block text-xs text-white/70">
-              {tier === 'registered' ? '註冊會員' : '訪客'} • 每日 {dailyLimit}{' '}
-              次
+              {tierLabel} • 每日 {dailyLimit} 次
             </span>
           </span>
         </button>
