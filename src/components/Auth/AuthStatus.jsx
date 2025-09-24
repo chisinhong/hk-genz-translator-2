@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Loader2, User } from 'lucide-react';
 import { useAuth } from '../../utils/AuthContext';
 
@@ -85,7 +86,7 @@ const AuthStatus = () => {
     if (!isPanelOpen) return null;
 
     return (
-      <div className="absolute right-0 mt-2 w-80 rounded-2xl bg-white/95 p-4 text-gray-900 shadow-xl">
+      <div className="absolute right-0 mt-2 w-80 rounded-2xl bg-white/95 p-4 text-gray-900 shadow-xl z-10">
         <div className="mb-3 flex items-center justify-between">
           <h3 className="text-base font-semibold">
             {mode === 'signIn' ? '登入帳戶' : '建立新帳戶'}
@@ -123,7 +124,9 @@ const AuthStatus = () => {
             </label>
             <input
               type="password"
-              autoComplete={mode === 'signIn' ? 'current-password' : 'new-password'}
+              autoComplete={
+                mode === 'signIn' ? 'current-password' : 'new-password'
+              }
               value={formState.password}
               onChange={handleChange('password')}
               className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
@@ -147,9 +150,7 @@ const AuthStatus = () => {
             </div>
           )}
 
-          {message && (
-            <p className="text-xs text-indigo-600">{message}</p>
-          )}
+          {message && <p className="text-xs text-indigo-600">{message}</p>}
 
           {error && (
             <p className="text-xs text-red-500">
@@ -201,7 +202,8 @@ const AuthStatus = () => {
               {user.displayName || user.email || '已登入用戶'}
             </span>
             <span className="block text-xs text-white/70">
-              {tier === 'registered' ? '註冊會員' : '訪客'} • 每日 {dailyLimit} 次
+              {tier === 'registered' ? '註冊會員' : '訪客'} • 每日 {dailyLimit}{' '}
+              次
             </span>
           </span>
         </button>
@@ -210,7 +212,16 @@ const AuthStatus = () => {
             <p className="mb-3 text-sm font-semibold text-gray-700">
               你已登入，可使用每日 {dailyLimit} 次翻譯配額。
             </p>
-            {message && <p className="mb-2 text-xs text-indigo-600">{message}</p>}
+            <Link
+              to="/settings"
+              onClick={() => setIsPanelOpen(false)}
+              className="mb-2 flex w-full items-center justify-center rounded-lg border border-indigo-200 py-2 text-xs font-semibold text-indigo-600 transition hover:bg-indigo-50"
+            >
+              查看帳戶設定
+            </Link>
+            {message && (
+              <p className="mb-2 text-xs text-indigo-600">{message}</p>
+            )}
             {error && (
               <p className="mb-2 text-xs text-red-500">
                 {error.message || '操作失敗，請稍後再試。'}
