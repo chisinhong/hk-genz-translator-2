@@ -4,6 +4,7 @@ import { Crown, Loader2, LogOut, RefreshCw, ShieldCheck } from 'lucide-react';
 import { useAuth } from '../utils/AuthContext';
 import { useTranslationUsage } from '../utils/TranslationUsageContext';
 import { useUpgradeModalContext } from '../components/Upgrade/UpgradeModalProvider';
+import BackButton from '../components/common/BackButton';
 
 const infoItemClass =
   'rounded-2xl bg-white/10 border border-white/10 px-4 py-5 text-left shadow-lg backdrop-blur';
@@ -53,8 +54,9 @@ const ProfilePage = () => {
   };
 
   return (
-    <div className="container mx-auto max-w-4xl px-4 py-10 text-white">
-      <header className="mb-8 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+    <div className="container relative mx-auto max-w-4xl px-4 py-12 text-white">
+      <BackButton className="absolute left-4 top-4" />
+      <header className="mt-8 mb-8 flex flex-col gap-2 md:mt-0 md:flex-row md:items-end md:justify-between">
         <div>
           <p className="text-sm uppercase tracking-widest text-white/60">
             帳戶設定

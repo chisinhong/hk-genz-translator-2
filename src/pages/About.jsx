@@ -1,6 +1,9 @@
+import BackButton from '../components/common/BackButton';
+
 const About = () => (
-  <main className="container mx-auto px-4 py-8 md:py-16 text-center">
-    <div className="max-w-4xl mx-auto p-8 bg-white/10 backdrop-blur-lg rounded-2xl">
+  <main className="container relative mx-auto px-4 py-12 md:py-16 text-center text-white">
+    <BackButton className="absolute left-4 top-4" />
+    <div className="mx-auto max-w-4xl rounded-2xl bg-white/10 p-8 backdrop-blur-lg">
       <h1 className="text-3xl font-bold mb-6">關於 HK GenZ Translator</h1>
       <div className="space-y-4 text-white/90">
         <p>
