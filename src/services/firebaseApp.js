@@ -158,7 +158,30 @@ export async function ensureAuthUser() {
 }
 
 export function getAppId() {
-  return typeof __app_id !== 'undefined' && __app_id ? __app_id : 'default-app-id';
+  if (typeof __app_id !== 'undefined' && __app_id) {
+    return __app_id;
+  }
+
+  if (typeof import.meta !== 'undefined' && import.meta.env) {
+    const envAppId = import.meta.env.VITE_FIREBASE_APP_ID;
+    if (envAppId) {
+      return envAppId;
+    }
+  }
+
+  try {
+    const { app } = ensureFirebaseApp();
+    if (app?.options?.projectId) {
+      return app.options.projectId;
+    }
+    if (app?.options?.appId) {
+      return app.options.appId;
+    }
+  } catch (error) {
+    console.warn('無法從 Firebase App 取得 appId:', error);
+  }
+
+  return 'default-app';
 }
 
 export function isFirebaseConfigured() {

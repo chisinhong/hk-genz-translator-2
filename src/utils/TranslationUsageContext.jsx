@@ -10,6 +10,7 @@ import React, {
 import { fetchTodayUsage } from '../services/firebaseUsage';
 import { isFirebaseConfigured } from '../services/firebaseApp';
 import { validateUsageQuota } from '../services/quotaService';
+import { useAuth } from './AuthContext';
 
 const DEFAULT_DAILY_LIMIT = 10;
 const LOCAL_STORAGE_KEY = 'translation_usage_daily';
@@ -69,11 +70,17 @@ export function TranslationUsageProvider({
     isLoading: true,
     error: null,
   });
+  const { user, dailyLimit: authDailyLimit, tier, loading: isAuthLoading } =
+    useAuth();
 
   useEffect(() => {
     let isMounted = true;
 
     const initialiseUsage = async () => {
+      if (isAuthLoading) {
+        return;
+      }
+
       if (typeof window === 'undefined') {
         if (!isMounted) return;
         setState((prev) => ({
@@ -85,11 +92,12 @@ export function TranslationUsageProvider({
         return;
       }
 
-      if (!isFirebaseConfigured()) {
+      if (!user || !isFirebaseConfigured()) {
         const localCount = readLocalUsageCount();
         if (!isMounted) return;
         setState((prev) => ({
           ...prev,
+          userId: user?.uid || null,
           storageMode: 'local',
           translationCount: localCount,
           isLoading: false,
@@ -107,6 +115,9 @@ export function TranslationUsageProvider({
           translationCount: usage.count,
           storageMode: 'remote',
           isLoading: false,
+          dailyLimit: Number.isFinite(authDailyLimit)
+            ? authDailyLimit
+            : prev.dailyLimit,
           error: null,
         }));
       } catch (error) {
@@ -115,8 +126,12 @@ export function TranslationUsageProvider({
         if (!isMounted) return;
         setState((prev) => ({
           ...prev,
+          userId: user?.uid || null,
           storageMode: 'local',
           translationCount: fallbackCount,
+          dailyLimit: Number.isFinite(authDailyLimit)
+            ? authDailyLimit
+            : prev.dailyLimit,
           isLoading: false,
           error: '目前無法連線至伺服器，暫時使用離線計數。',
         }));
@@ -128,17 +143,18 @@ export function TranslationUsageProvider({
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [isAuthLoading, user, authDailyLimit]);
 
   useEffect(() => {
     setState((prev) => ({ ...prev, dailyLimit }));
   }, [dailyLimit]);
 
   const refreshUsage = useCallback(async () => {
-    if (!isFirebaseConfigured()) {
+    if (!isFirebaseConfigured() || !user) {
       const localCount = readLocalUsageCount();
       setState((prev) => ({
         ...prev,
+        userId: user?.uid || null,
         storageMode: 'local',
         translationCount: localCount,
         isLoading: false,
@@ -155,6 +171,9 @@ export function TranslationUsageProvider({
         translationCount: usage.count,
         storageMode: 'remote',
         isLoading: false,
+        dailyLimit: Number.isFinite(authDailyLimit)
+          ? authDailyLimit
+          : prev.dailyLimit,
         error: null,
       }));
       return { storageMode: 'remote', translationCount: usage.count };
@@ -163,14 +182,18 @@ export function TranslationUsageProvider({
       const fallbackCount = readLocalUsageCount();
       setState((prev) => ({
         ...prev,
+        userId: user?.uid || null,
         storageMode: 'local',
         translationCount: fallbackCount,
+        dailyLimit: Number.isFinite(authDailyLimit)
+          ? authDailyLimit
+          : prev.dailyLimit,
         isLoading: false,
         error: '目前無法連線至伺服器，暫時使用離線計數。',
       }));
       return { storageMode: 'local', translationCount: fallbackCount };
     }
-  }, []);
+  }, [authDailyLimit, user]);
 
   const registerTranslationAttempt = useCallback(async () => {
     if (
@@ -183,7 +206,7 @@ export function TranslationUsageProvider({
     const currentCount = state.translationCount;
     const configuredLimit = state.dailyLimit;
 
-    if (state.storageMode === 'remote') {
+    if (state.storageMode === 'remote' && user) {
       try {
         const quotaResult = await validateUsageQuota({
           limitType: 'daily',
@@ -194,6 +217,7 @@ export function TranslationUsageProvider({
         writeLocalUsageCount(quotaResult.usage);
         setState((prev) => ({
           ...prev,
+          userId: user.uid,
           translationCount: quotaResult.usage,
           dailyLimit: Number.isFinite(quotaResult.limit)
             ? quotaResult.limit
@@ -204,7 +228,7 @@ export function TranslationUsageProvider({
           allowed: true,
           storageMode: 'remote',
           translationCount: quotaResult.usage,
-          userId: state.userId,
+          userId: user.uid,
           quota: quotaResult,
         };
       } catch (error) {
@@ -245,6 +269,7 @@ export function TranslationUsageProvider({
         const localCount = writeLocalUsageCount(currentCount + 1);
         setState((prev) => ({
           ...prev,
+          userId: user?.uid || null,
           translationCount: localCount,
           storageMode: 'local',
           error: '無法連線至伺服器，已改用離線計數。',
@@ -261,6 +286,7 @@ export function TranslationUsageProvider({
     const nextCount = writeLocalUsageCount(currentCount + 1);
     setState((prev) => ({
       ...prev,
+      userId: user?.uid || null,
       translationCount: nextCount,
       storageMode: 'local',
     }));
@@ -274,8 +300,25 @@ export function TranslationUsageProvider({
     state.translationCount,
     state.dailyLimit,
     state.storageMode,
-    state.userId,
+    user,
+    authDailyLimit,
   ]);
+
+  useEffect(() => {
+    const targetLimit = Number.isFinite(authDailyLimit)
+      ? authDailyLimit
+      : tier === 'registered'
+        ? 50
+        : DEFAULT_DAILY_LIMIT;
+
+    setState((prev) => ({
+      ...prev,
+      dailyLimit:
+        prev.storageMode === 'remote' && Number.isFinite(prev.dailyLimit)
+          ? prev.dailyLimit
+          : targetLimit,
+    }));
+  }, [authDailyLimit, tier]);
 
   const value = useMemo(() => {
     const remainingTranslations = Math.max(
@@ -294,8 +337,9 @@ export function TranslationUsageProvider({
       error: state.error,
       refreshUsage,
       registerTranslationAttempt,
+      tier,
     };
-  }, [state, refreshUsage, registerTranslationAttempt]);
+  }, [state, refreshUsage, registerTranslationAttempt, tier]);
 
   return (
     <TranslationUsageContext.Provider value={value}>

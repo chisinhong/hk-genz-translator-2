@@ -1,0 +1,38 @@
+type User @table {
+  username: String!
+  email: String!
+  createdAt: Timestamp!
+  userTier: String
+}
+
+type SlangTerm @table {
+  cantonesePhrase: String!
+  englishTranslation: String!
+  createdAt: Timestamp!
+  description: String
+  exampleUsage: String
+}
+
+type Translation @table {
+  user: User!
+  slangTerm: SlangTerm
+  queryText: String!
+  translatedText: String!
+  translationDirection: String!
+  createdAt: Timestamp!
+}
+
+type Submission @table {
+  user: User!
+  cantonesePhrase: String!
+  englishTranslation: String!
+  status: String!
+  createdAt: Timestamp!
+  description: String
+  exampleUsage: String
+}
+
+type FavoriteSlang @table(key: ["user", "slangTerm"]) {
+  user: User!
+  slangTerm: SlangTerm!
+}

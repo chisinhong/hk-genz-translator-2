@@ -1,0 +1,25 @@
+mutation SeedSlangTerms @auth(level: USER) {
+  slangTerm_insertMany(data: [
+    {
+      cantonesePhrase: "早抖",
+      englishTranslation: "Good night",
+      exampleUsage: "我好眼瞓，要早抖啦！(I'm sleepy, I'm going to bed!)",
+      createdAt: "2024-01-01T00:00:00Z",
+      description: "A common way to say good night in Cantonese."
+    },
+    {
+      cantonesePhrase: "搞掂",
+      englishTranslation: "Done; to complete; to finish",
+      exampleUsage: "我已經搞掂曬啲功課。(I've already finished all my homework.)",
+      createdAt: "2024-01-02T00:00:00Z",
+      description: "Indicates that a task or something has been completed."
+    },
+    {
+      cantonesePhrase: "唔該",
+      englishTranslation: "Thank you / Excuse me",
+      exampleUsage: "唔該曬你幫我嘅忙。(Thank you for helping me.)",
+      createdAt: "2024-01-03T00:00:00Z",
+      description: "A versatile phrase used for both 'thank you' and 'excuse me'."
+    }
+  ])
+}

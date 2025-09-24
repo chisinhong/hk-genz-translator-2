@@ -1,0 +1,33 @@
+mutation AddSlangTerm @auth(level: USER) {
+  slangTerm_insert(data: {
+    cantonesePhrase: "someCantonesePhrase",
+    englishTranslation: "someEnglishTranslation",
+    exampleUsage: "someExampleUsage",
+    description: "someDescription"
+  })
+}
+
+query GetSlangTerms @auth(level: PUBLIC) {
+  slangTerms {
+    id
+    cantonesePhrase
+    englishTranslation
+  }
+}
+
+mutation AddFavoriteSlang($slangTermId: UUID!) @auth(level: USER) {
+  favoriteSlang_insert(data: {
+    slangTermId: $slangTermId,
+    userId_expr: "auth.uid"
+  })
+}
+
+query GetMySubmissions @auth(level: USER) {
+  submissions(where: {userId: {eq_expr: "auth.uid"}}) {
+    id
+    cantonesePhrase
+    englishTranslation
+    exampleUsage
+    status
+  }
+}

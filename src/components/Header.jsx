@@ -1,6 +1,7 @@
 import React from 'react';
 import { useContribution } from '../utils/ContributionContext';
 import { useTester } from '../utils/TesterContext';
+import AuthStatus from './Auth/AuthStatus';
 
 export default function Header() {
   const { showTester, setShowTester } = useTester();
@@ -31,6 +32,8 @@ export default function Header() {
               {showTester ? '隱藏測試器' : '顯示測試器'}
             </button>
           )}
+
+          <AuthStatus />
         </div>
       </nav>
     </header>

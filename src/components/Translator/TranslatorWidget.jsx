@@ -13,6 +13,7 @@ import {
 import { geminiTranslator } from '../../services/geminiAPI';
 import { useTranslationUsage } from '../../utils/TranslationUsageContext';
 import { trackTranslationAttempt } from '../../utils/analytics';
+import { useUpgradeModalContext } from '../Upgrade/UpgradeModalProvider';
 
 const TranslatorWidget = () => {
   // 基本狀態
@@ -38,8 +39,7 @@ const TranslatorWidget = () => {
     registerTranslationAttempt,
     refreshUsage,
   } = useTranslationUsage();
-
-  const upgradeUrl = import.meta.env.VITE_UPGRADE_URL || '/upgrade';
+  const { openModal: openUpgradeModal } = useUpgradeModalContext();
 
   // 引用
   const inputRef = useRef(null);
@@ -161,6 +161,13 @@ const TranslatorWidget = () => {
           setError(
             `今日翻譯次數已達上限 (${limit}次)，請明天再試或升級會員`
           );
+          openUpgradeModal({
+            limit,
+            remaining,
+            currentCount:
+              usageResult.quota?.currentCount ?? translationCount ?? limit,
+            limitType,
+          });
         } else {
           setQuotaDetails(null);
           setError(
@@ -367,9 +374,15 @@ const TranslatorWidget = () => {
   };
 
   const handleUpgradeClick = () => {
-    if (upgradeUrl) {
-      window.open(upgradeUrl, '_blank', 'noopener');
-    }
+    const fallbackDetails = {
+      limit: quotaDetails?.limit ?? dailyLimit,
+      remaining:
+        quotaDetails?.remaining ?? Math.max(dailyLimit - translationCount, 0),
+      currentCount: quotaDetails?.currentCount ?? translationCount,
+      limitType: quotaDetails?.limitType || 'daily',
+    };
+
+    openUpgradeModal(fallbackDetails);
   };
 
   // 信心度顏色

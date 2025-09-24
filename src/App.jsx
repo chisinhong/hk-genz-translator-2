@@ -13,6 +13,8 @@ import About from './pages/About';
 import { ContributionProvider } from './utils/ContributionContext';
 import { TesterProvider, useTester } from './utils/TesterContext';
 import { TranslationUsageProvider } from './utils/TranslationUsageContext';
+import { AuthProvider } from './utils/AuthContext';
+import { UpgradeModalProvider } from './components/Upgrade/UpgradeModalProvider';
 
 const Theme = ({ children }) => (
   <div className="min-h-screen bg-gradient-to-br from-pink-500 via-purple-600 to-indigo-700 text-white font-sans">
@@ -85,18 +87,22 @@ function App() {
   return (
     <TesterProvider>
       <ContributionProvider>
-        <TranslationUsageProvider>
-          <Theme>
-            <BrowserRouter>
-              <Routes>
-                <Route path="/" element={<AppContent />} />
-                <Route path="/privacy" element={<PrivacyPolicy />} />
-                <Route path="/terms" element={<Terms />} />
-                <Route path="/about" element={<About />} />
-              </Routes>
-            </BrowserRouter>
-          </Theme>
-        </TranslationUsageProvider>
+        <AuthProvider>
+          <TranslationUsageProvider>
+            <UpgradeModalProvider>
+              <Theme>
+                <BrowserRouter>
+                  <Routes>
+                    <Route path="/" element={<AppContent />} />
+                    <Route path="/privacy" element={<PrivacyPolicy />} />
+                    <Route path="/terms" element={<Terms />} />
+                    <Route path="/about" element={<About />} />
+                  </Routes>
+                </BrowserRouter>
+              </Theme>
+            </UpgradeModalProvider>
+          </TranslationUsageProvider>
+        </AuthProvider>
       </ContributionProvider>
     </TesterProvider>
   );

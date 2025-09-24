@@ -1,0 +1,20 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /artifacts/{appId}/public/data/contributions/{docId} {
+      allow read: if true;
+      allow create: if request.auth != null;   // 匿名登入也有 request.auth.uid
+    }
+
+    match /artifacts/{appId}/public/data/translatorUsage/{userId} {
+      allow read, create, update: if request.auth != null
+        && request.auth.uid == userId;
+      allow delete: if false;  // 不允許直接刪除，視需求可放開
+    }
+
+    // 其餘 public/data 底下的文件預設拒絕
+    match /artifacts/{appId}/public/data/{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

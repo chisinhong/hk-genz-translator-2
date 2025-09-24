@@ -23,3 +23,19 @@ export const trackTranslationAttempt = (type, metadata = {}) => {
     ...metadata,
   });
 };
+
+export const trackUpgradeModalOpened = (metadata = {}) => {
+  trackEvent('upgrade_modal_opened', metadata);
+};
+
+export const trackUpgradeModalClosed = (metadata = {}) => {
+  trackEvent('upgrade_modal_closed', metadata);
+};
+
+export const trackUpgradeModalUpgradeClick = (metadata = {}) => {
+  trackEvent('upgrade_modal_upgrade_click', metadata);
+};
+
+export const trackUpgradeModalSocialClick = (metadata = {}) => {
+  trackEvent('upgrade_modal_social_click', metadata);
+};
