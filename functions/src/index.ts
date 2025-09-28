@@ -8,25 +8,410 @@
  */
 
 import {setGlobalOptions} from "firebase-functions";
-import {onRequest} from "firebase-functions/https";
-import * as logger from "firebase-functions/logger";
+import {HttpsError, onCall} from "firebase-functions/v2/https";
+import {initializeApp} from "firebase-admin/app";
+import {FieldValue, getFirestore} from "firebase-admin/firestore";
 
-// Start writing functions
-// https://firebase.google.com/docs/functions/typescript
+setGlobalOptions({maxInstances: 10});
 
-// For cost control, you can set the maximum number of containers that can be
-// running at the same time. This helps mitigate the impact of unexpected
-// traffic spikes by instead downgrading performance. This limit is a
-// per-function limit. You can override the limit for each function using the
-// `maxInstances` option in the function's options, e.g.
-// `onRequest({ maxInstances: 5 }, (req, res) => { ... })`.
-// NOTE: setGlobalOptions does not apply to functions using the v1 API. V1
-// functions should each use functions.runWith({ maxInstances: 10 }) instead.
-// In the v1 API, each function can only serve one request per container, so
-// this will be the maximum concurrent request count.
-setGlobalOptions({ maxInstances: 10 });
+initializeApp();
 
-// export const helloWorld = onRequest((request, response) => {
-//   logger.info("Hello logs!", {structuredData: true});
-//   response.send("Hello from Firebase!");
-// });
+const firestore = getFirestore();
+const GRAPH_VERSION = process.env.META_GRAPH_VERSION ?? "v19.0";
+
+type MetaPlatform = "instagram" | "threads";
+
+interface GoogleProfilePayload {
+  email?: unknown;
+  displayName?: unknown;
+  photoURL?: unknown;
+  uid?: unknown;
+  providerId?: unknown;
+}
+
+interface GoogleConnectPayload {
+  appId?: unknown;
+  accessToken?: unknown;
+  idToken?: unknown;
+  profile?: GoogleProfilePayload;
+  scope?: unknown;
+}
+
+type FetchFn = (
+  input: string | URL,
+  init?: Record<string, unknown>,
+) => Promise<{
+  ok: boolean;
+  status: number;
+  json(): Promise<unknown>;
+  text(): Promise<string>;
+}>;
+
+interface PlatformConfig {
+  appId: string;
+  appSecret: string;
+  tokenExchangeUrl: string;
+  profileUrl: string;
+  defaultScopes: string;
+}
+
+const META_ALLOWED_REDIRECTS = (process.env.META_ALLOWED_REDIRECT_URIS ?? "")
+  .split(",")
+  .map((item) => item.trim())
+  .filter(Boolean);
+
+const PLATFORM_CONFIG: Record<MetaPlatform, PlatformConfig> = {
+  instagram: {
+    appId: process.env.META_INSTAGRAM_APP_ID ?? process.env.META_APP_ID ?? "",
+    appSecret: process.env.META_INSTAGRAM_APP_SECRET ??
+      process.env.META_APP_SECRET ?? "",
+    tokenExchangeUrl: process.env.META_INSTAGRAM_TOKEN_URL ??
+      "https://graph.instagram.com/oauth/access_token",
+    profileUrl: process.env.META_INSTAGRAM_PROFILE_URL ??
+      "https://graph.instagram.com/me?fields=id,username,account_type",
+    defaultScopes: process.env.META_INSTAGRAM_SCOPES ?? "instagram_basic",
+  },
+  threads: {
+    appId: process.env.META_THREADS_APP_ID ?? process.env.META_APP_ID ?? "",
+    appSecret: process.env.META_THREADS_APP_SECRET ??
+      process.env.META_APP_SECRET ?? "",
+    tokenExchangeUrl: process.env.META_THREADS_TOKEN_URL ??
+      `https://graph.facebook.com/${GRAPH_VERSION}/oauth/access_token`,
+    profileUrl: process.env.META_THREADS_PROFILE_URL ??
+      `https://graph.facebook.com/${GRAPH_VERSION}/me?fields=id,name`,
+    defaultScopes: process.env.META_THREADS_SCOPES ?? "public_profile",
+  },
+};
+
+function resolveSelectedPlatform(
+  existing: Record<string, unknown> | undefined,
+): MetaPlatform | null {
+  if (!existing) return null;
+  const rawSocial = existing.socialConnections;
+  if (!rawSocial || typeof rawSocial !== "object") return null;
+  const meta = (rawSocial as Record<string, unknown>).meta;
+  if (!meta || typeof meta !== "object") return null;
+  const selected = (meta as Record<string, unknown>).selectedPlatform;
+  return selected === "instagram" || selected === "threads" ? selected : null;
+}
+
+function normalizeString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length ? trimmed : null;
+}
+
+interface MetaExchangeRequest {
+  platform: MetaPlatform;
+  appId: string;
+  code: string;
+  redirectUri: string;
+  scope?: string;
+}
+
+interface TokenExchangeResponse {
+  access_token: string;
+  token_type?: string;
+  expires_in?: number;
+}
+
+interface ProfileSummary {
+  id: string | null;
+  username: string | null;
+  name: string | null;
+  accountType?: string | null;
+}
+
+function assertPlatformConfig(platform: MetaPlatform): PlatformConfig {
+  const config = PLATFORM_CONFIG[platform];
+  if (!config?.appId || !config?.appSecret) {
+    throw new HttpsError(
+      "failed-precondition",
+      `Meta OAuth config missing for platform: ${platform}`,
+    );
+  }
+  return config;
+}
+
+function validateRedirectUri(redirectUri: string) {
+  if (!redirectUri) {
+    throw new HttpsError("invalid-argument", "redirectUri is required");
+  }
+
+  try {
+    // eslint-disable-next-line no-new
+    const parsed = new URL(redirectUri);
+    if (!parsed.protocol.startsWith("http")) {
+      throw new Error("Unsupported protocol");
+    }
+  } catch (error) {
+    throw new HttpsError(
+      "invalid-argument",
+      `Invalid redirectUri provided: ${redirectUri}`,
+    );
+  }
+
+  if (META_ALLOWED_REDIRECTS.length > 0 &&
+    !META_ALLOWED_REDIRECTS.includes(redirectUri)) {
+    throw new HttpsError(
+      "permission-denied",
+      "redirectUri is not in the allow list",
+    );
+  }
+}
+
+function normalizeProfile(data: Record<string, unknown>): ProfileSummary {
+  return {
+    id: typeof data.id === "string" ? data.id : null,
+    username: typeof data.username === "string" ? data.username : null,
+    name: typeof data.name === "string" ? data.name : null,
+    accountType: typeof data.account_type === "string" ? data.account_type :
+      null,
+  };
+}
+
+async function exchangeToken(
+  config: PlatformConfig,
+  code: string,
+  redirectUri: string,
+): Promise<TokenExchangeResponse> {
+  const fetchImpl = (globalThis as unknown as {fetch?: FetchFn}).fetch;
+  if (!fetchImpl) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Fetch API not available in runtime",
+    );
+  }
+
+  const form = new URLSearchParams({
+    client_id: config.appId,
+    client_secret: config.appSecret,
+    redirect_uri: redirectUri,
+    code,
+    grant_type: "authorization_code",
+  });
+
+  const response = await fetchImpl(config.tokenExchangeUrl, {
+    method: "POST",
+    headers: {"Content-Type": "application/x-www-form-urlencoded"},
+    body: form.toString(),
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new HttpsError(
+      "failed-precondition",
+      `Meta token exchange failed: ${response.status} ${errorBody}`,
+    );
+  }
+
+  return await response.json() as TokenExchangeResponse;
+}
+
+async function fetchProfile(
+  config: PlatformConfig,
+  accessToken: string,
+): Promise<ProfileSummary | null> {
+  try {
+    const fetchImpl = (globalThis as unknown as {fetch?: FetchFn}).fetch;
+    if (!fetchImpl) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Fetch API not available in runtime",
+      );
+    }
+    const separator = config.profileUrl.includes("?") ? "&" : "?";
+    const profileResponse = await fetchImpl(
+      `${config.profileUrl}${separator}access_token=${encodeURIComponent(accessToken)}`,
+    );
+    if (!profileResponse.ok) {
+      return null;
+    }
+    const raw = await profileResponse.json() as Record<string, unknown>;
+    return normalizeProfile(raw);
+  } catch (error) {
+    console.error("Meta profile fetch failed", error);
+    return null;
+  }
+}
+
+function buildUserDocPath(appId: string, uid: string) {
+  return `artifacts/${appId}/private/metadata/users/${uid}`;
+}
+
+export const exchangeMetaCode = onCall(async (request) => {
+  const {auth, data} = request;
+  if (!auth?.uid) {
+    throw new HttpsError("unauthenticated", "User authentication required");
+  }
+
+  const payload = (data ?? {}) as Partial<MetaExchangeRequest>;
+  const {platform, appId, code, redirectUri, scope} = payload;
+
+  if (!platform || !["instagram", "threads"].includes(platform)) {
+    throw new HttpsError("invalid-argument", "Unsupported platform");
+  }
+  if (!appId || typeof appId !== "string") {
+    throw new HttpsError("invalid-argument", "appId is required");
+  }
+  if (!code || typeof code !== "string") {
+    throw new HttpsError("invalid-argument", "OAuth code is required");
+  }
+
+  if (!redirectUri || typeof redirectUri !== "string") {
+    throw new HttpsError("invalid-argument", "redirectUri is required");
+  }
+  validateRedirectUri(redirectUri);
+
+  const config = assertPlatformConfig(platform);
+  const tokenResponse = await exchangeToken(config, code, redirectUri);
+
+  if (!tokenResponse.access_token) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Meta token response missing access_token",
+    );
+  }
+
+  const now = Date.now();
+  const expiresInSeconds = tokenResponse.expires_in ?? null;
+  const expiresAt = expiresInSeconds ? new Date(now + expiresInSeconds * 1000) :
+    null;
+
+  const profile = await fetchProfile(config, tokenResponse.access_token);
+
+  const docRef = firestore.doc(buildUserDocPath(appId, auth.uid));
+  const updateData: Record<string, unknown> = {
+    "socialConnections.meta.selectedPlatform": platform,
+    "socialConnections.meta.updatedAt": FieldValue.serverTimestamp(),
+  };
+
+  updateData[`socialConnections.meta.platforms.${platform}`] = {
+    accessToken: tokenResponse.access_token,
+    tokenType: tokenResponse.token_type ?? "Bearer",
+    expiresIn: expiresInSeconds,
+    expiresAt,
+    profile: profile ?? null,
+    scope: scope ?? config.defaultScopes,
+    linkedAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+  };
+
+  await docRef.set(updateData, {merge: true});
+
+  return {
+    platform,
+    selectedPlatform: platform,
+    expiresAt: expiresAt ? expiresAt.toISOString() : null,
+    profile,
+  };
+});
+
+export const unlinkMetaPlatform = onCall(async (request) => {
+  const {auth, data} = request;
+  if (!auth?.uid) {
+    throw new HttpsError("unauthenticated", "User authentication required");
+  }
+
+  const payload = (data ?? {}) as Partial<{platform: MetaPlatform; appId: string}>;
+  const {platform, appId} = payload;
+
+  if (!platform || !["instagram", "threads"].includes(platform)) {
+    throw new HttpsError("invalid-argument", "Unsupported platform");
+  }
+  if (!appId || typeof appId !== "string") {
+    throw new HttpsError("invalid-argument", "appId is required");
+  }
+
+  const docRef = firestore.doc(buildUserDocPath(appId, auth.uid));
+  const snapshot = await docRef.get();
+  const existing = snapshot.data() as Record<string, unknown> | undefined;
+  const selected = resolveSelectedPlatform(existing);
+
+  const updateData: Record<string, unknown> = {
+    "socialConnections.meta.updatedAt": FieldValue.serverTimestamp(),
+  };
+
+  updateData[`socialConnections.meta.platforms.${platform}`] = FieldValue.delete();
+
+  if (selected === platform) {
+    updateData["socialConnections.meta.selectedPlatform"] = FieldValue.delete();
+  }
+
+  await docRef.set(updateData, {merge: true});
+
+  return {
+    platform,
+    selectedPlatform: selected === platform ? null : selected,
+  };
+});
+
+export const syncGoogleProvider = onCall(async (request) => {
+  const {auth, data} = request;
+  if (!auth?.uid) {
+    throw new HttpsError("unauthenticated", "User authentication required");
+  }
+
+  const payload = (data ?? {}) as GoogleConnectPayload;
+  const appId = normalizeString(payload.appId);
+  if (!appId) {
+    throw new HttpsError("invalid-argument", "appId is required");
+  }
+
+  const docRef = firestore.doc(buildUserDocPath(appId, auth.uid));
+
+  const googleData: Record<string, unknown> = {
+    providerId: "google.com",
+    email: normalizeString(payload.profile?.email),
+    displayName: normalizeString(payload.profile?.displayName),
+    photoURL: normalizeString(payload.profile?.photoURL),
+    uid: normalizeString(payload.profile?.uid),
+    accessToken: normalizeString(payload.accessToken),
+    idToken: normalizeString(payload.idToken),
+    scope: normalizeString(payload.scope),
+    linkedAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+  };
+
+  const updateData: Record<string, unknown> = {
+    "socialConnections.providers.google": googleData,
+    "socialConnections.providers.updatedAt": FieldValue.serverTimestamp(),
+    "socialConnections.updatedAt": FieldValue.serverTimestamp(),
+  };
+
+  await docRef.set(updateData, {merge: true});
+
+  return {
+    provider: "google",
+    email: googleData.email ?? null,
+    displayName: googleData.displayName ?? null,
+    photoURL: googleData.photoURL ?? null,
+  };
+});
+
+export const unlinkGoogleProvider = onCall(async (request) => {
+  const {auth, data} = request;
+  if (!auth?.uid) {
+    throw new HttpsError("unauthenticated", "User authentication required");
+  }
+
+  const payload = (data ?? {}) as {appId?: unknown};
+  const appId = normalizeString(payload.appId);
+  if (!appId) {
+    throw new HttpsError("invalid-argument", "appId is required");
+  }
+
+  const docRef = firestore.doc(buildUserDocPath(appId, auth.uid));
+  const updateData: Record<string, unknown> = {
+    "socialConnections.providers.google": FieldValue.delete(),
+    "socialConnections.providers.updatedAt": FieldValue.serverTimestamp(),
+    "socialConnections.updatedAt": FieldValue.serverTimestamp(),
+  };
+
+  await docRef.set(updateData, {merge: true});
+
+  return {
+    provider: "google",
+    status: "unlinked",
+  };
+});

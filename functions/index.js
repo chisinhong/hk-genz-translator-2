@@ -130,6 +130,175 @@ function buildProfilePayload(userId, normalized, appId) {
   };
 }
 
+const GRAPH_VERSION = process.env.META_GRAPH_VERSION || 'v19.0';
+
+const META_ALLOWED_REDIRECTS = (process.env.META_ALLOWED_REDIRECT_URIS || '')
+  .split(',')
+  .map((item) => item.trim())
+  .filter(Boolean);
+
+const PLATFORM_CONFIG = {
+  instagram: {
+    appId:
+      process.env.META_INSTAGRAM_APP_ID || process.env.META_APP_ID || '',
+    appSecret:
+      process.env.META_INSTAGRAM_APP_SECRET ||
+      process.env.META_APP_SECRET ||
+      '',
+    tokenExchangeUrl:
+      process.env.META_INSTAGRAM_TOKEN_URL ||
+      'https://graph.instagram.com/oauth/access_token',
+    profileUrl:
+      process.env.META_INSTAGRAM_PROFILE_URL ||
+      'https://graph.instagram.com/me?fields=id,username,account_type',
+    defaultScopes: process.env.META_INSTAGRAM_SCOPES || 'instagram_basic',
+  },
+  threads: {
+    appId: process.env.META_THREADS_APP_ID || process.env.META_APP_ID || '',
+    appSecret:
+      process.env.META_THREADS_APP_SECRET ||
+      process.env.META_APP_SECRET ||
+      '',
+    tokenExchangeUrl:
+      process.env.META_THREADS_TOKEN_URL ||
+      `https://graph.facebook.com/${GRAPH_VERSION}/oauth/access_token`,
+    profileUrl:
+      process.env.META_THREADS_PROFILE_URL ||
+      `https://graph.facebook.com/${GRAPH_VERSION}/me?fields=id,name`,
+    defaultScopes: process.env.META_THREADS_SCOPES || 'public_profile',
+  },
+};
+
+function normalizeString(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed.length ? trimmed : null;
+}
+
+function assertPlatformConfig(platform) {
+  const config = PLATFORM_CONFIG[platform];
+  if (!config || !config.appId || !config.appSecret) {
+    throw new HttpsError(
+      'failed-precondition',
+      `Meta OAuth config missing for platform: ${platform}`
+    );
+  }
+  return config;
+}
+
+function validateRedirectUri(redirectUri) {
+  if (!redirectUri) {
+    throw new HttpsError('invalid-argument', 'redirectUri is required');
+  }
+
+  try {
+    // eslint-disable-next-line no-new
+    const parsed = new URL(redirectUri);
+    if (!parsed.protocol.startsWith('http')) {
+      throw new Error('Unsupported protocol');
+    }
+  } catch (error) {
+    throw new HttpsError(
+      'invalid-argument',
+      `Invalid redirectUri provided: ${redirectUri}`
+    );
+  }
+
+  if (
+    META_ALLOWED_REDIRECTS.length > 0 &&
+    !META_ALLOWED_REDIRECTS.includes(redirectUri)
+  ) {
+    throw new HttpsError(
+      'permission-denied',
+      'redirectUri is not in the allow list'
+    );
+  }
+}
+
+function normalizeProfile(data) {
+  return {
+    id: typeof data.id === 'string' ? data.id : null,
+    username: typeof data.username === 'string' ? data.username : null,
+    name: typeof data.name === 'string' ? data.name : null,
+    accountType:
+      typeof data.account_type === 'string' ? data.account_type : null,
+  };
+}
+
+async function exchangeToken(config, code, redirectUri) {
+  const fetchImpl = globalThis.fetch;
+  if (typeof fetchImpl !== 'function') {
+    throw new HttpsError(
+      'failed-precondition',
+      'Fetch API not available in runtime'
+    );
+  }
+
+  const form = new URLSearchParams({
+    client_id: config.appId,
+    client_secret: config.appSecret,
+    redirect_uri: redirectUri,
+    code,
+    grant_type: 'authorization_code',
+  });
+
+  const response = await fetchImpl(config.tokenExchangeUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: form.toString(),
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new HttpsError(
+      'failed-precondition',
+      `Meta token exchange failed: ${response.status} ${errorBody}`
+    );
+  }
+
+  return response.json();
+}
+
+async function fetchProfile(config, accessToken) {
+  try {
+    const fetchImpl = globalThis.fetch;
+    if (typeof fetchImpl !== 'function') {
+      throw new HttpsError(
+        'failed-precondition',
+        'Fetch API not available in runtime'
+      );
+    }
+    const separator = config.profileUrl.includes('?') ? '&' : '?';
+    const profileResponse = await fetchImpl(
+      `${config.profileUrl}${separator}access_token=${encodeURIComponent(
+        accessToken
+      )}`
+    );
+    if (!profileResponse.ok) {
+      return null;
+    }
+    const raw = await profileResponse.json();
+    return normalizeProfile(raw || {});
+  } catch (error) {
+    logger.error('Meta profile fetch failed', error);
+    return null;
+  }
+}
+
+function resolveSelectedPlatform(existing) {
+  if (!existing || typeof existing !== 'object') return null;
+  const rawSocial = existing.socialConnections;
+  if (!rawSocial || typeof rawSocial !== 'object') return null;
+  const meta = rawSocial.meta;
+  if (!meta || typeof meta !== 'object') return null;
+  const selected = meta.selectedPlatform;
+  return selected === 'instagram' || selected === 'threads' ? selected : null;
+}
+
+function buildUserDocPath(appId, uid) {
+  return `artifacts/${appId}/private/metadata/users/${uid}`;
+}
+
 exports.validateQuota = onCall(async (request) => {
   if (!request.auth) {
     throw new HttpsError(
@@ -419,4 +588,198 @@ exports.completeTask = onCall(async (request) => {
   });
 
   return result;
+});
+
+exports.exchangeMetaCode = onCall(async (request) => {
+  const { auth, data } = request;
+  if (!auth || !auth.uid) {
+    throw new HttpsError('unauthenticated', 'User authentication required');
+  }
+
+  const payload = data || {};
+  const platform = payload.platform;
+  const appId = normalizeString(payload.appId);
+  const code = normalizeString(payload.code);
+  const redirectUri = normalizeString(payload.redirectUri);
+  const scope = normalizeString(payload.scope);
+
+  if (platform !== 'instagram' && platform !== 'threads') {
+    throw new HttpsError('invalid-argument', 'Unsupported platform');
+  }
+  if (!appId) {
+    throw new HttpsError('invalid-argument', 'appId is required');
+  }
+  if (!code) {
+    throw new HttpsError('invalid-argument', 'OAuth code is required');
+  }
+  if (!redirectUri) {
+    throw new HttpsError('invalid-argument', 'redirectUri is required');
+  }
+
+  validateRedirectUri(redirectUri);
+
+  const config = assertPlatformConfig(platform);
+  const tokenResponse = await exchangeToken(config, code, redirectUri);
+
+  if (!tokenResponse || !tokenResponse.access_token) {
+    throw new HttpsError(
+      'failed-precondition',
+      'Meta token response missing access_token'
+    );
+  }
+
+  const now = Date.now();
+  const expiresInSeconds =
+    typeof tokenResponse.expires_in === 'number'
+      ? tokenResponse.expires_in
+      : null;
+  const expiresAt = expiresInSeconds
+    ? new Date(now + expiresInSeconds * 1000)
+    : null;
+
+  const profile = await fetchProfile(config, tokenResponse.access_token);
+
+  const firestore = admin.firestore();
+  const docRef = firestore.doc(buildUserDocPath(appId, auth.uid));
+  const updateData = {
+    'socialConnections.meta.selectedPlatform': platform,
+    'socialConnections.meta.updatedAt': FieldValue.serverTimestamp(),
+  };
+
+  updateData[`socialConnections.meta.platforms.${platform}`] = {
+    accessToken: tokenResponse.access_token,
+    tokenType: tokenResponse.token_type || 'Bearer',
+    expiresIn: expiresInSeconds,
+    expiresAt,
+    profile: profile || null,
+    scope: scope || config.defaultScopes,
+    linkedAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+  };
+
+  await docRef.set(updateData, { merge: true });
+
+  return {
+    platform,
+    selectedPlatform: platform,
+    expiresAt: expiresAt ? expiresAt.toISOString() : null,
+    profile,
+  };
+});
+
+exports.unlinkMetaPlatform = onCall(async (request) => {
+  const { auth, data } = request;
+  if (!auth || !auth.uid) {
+    throw new HttpsError('unauthenticated', 'User authentication required');
+  }
+
+  const payload = data || {};
+  const platform = payload.platform;
+  const appId = normalizeString(payload.appId);
+
+  if (platform !== 'instagram' && platform !== 'threads') {
+    throw new HttpsError('invalid-argument', 'Unsupported platform');
+  }
+  if (!appId) {
+    throw new HttpsError('invalid-argument', 'appId is required');
+  }
+
+  const firestore = admin.firestore();
+  const docRef = firestore.doc(buildUserDocPath(appId, auth.uid));
+  const snapshot = await docRef.get();
+  const existing = snapshot.exists ? snapshot.data() : undefined;
+  const selected = resolveSelectedPlatform(existing);
+
+  const updateData = {
+    'socialConnections.meta.updatedAt': FieldValue.serverTimestamp(),
+  };
+
+  updateData[`socialConnections.meta.platforms.${platform}`] =
+    FieldValue.delete();
+
+  if (selected === platform) {
+    updateData['socialConnections.meta.selectedPlatform'] = FieldValue.delete();
+  }
+
+  await docRef.set(updateData, { merge: true });
+
+  return {
+    platform,
+    selectedPlatform: selected === platform ? null : selected,
+  };
+});
+
+exports.syncGoogleProvider = onCall(async (request) => {
+  const { auth, data } = request;
+  if (!auth || !auth.uid) {
+    throw new HttpsError('unauthenticated', 'User authentication required');
+  }
+
+  const payload = data || {};
+  const appId = normalizeString(payload.appId);
+  if (!appId) {
+    throw new HttpsError('invalid-argument', 'appId is required');
+  }
+
+  const firestore = admin.firestore();
+  const docRef = firestore.doc(buildUserDocPath(appId, auth.uid));
+
+  const googleData = {
+    providerId: 'google.com',
+    email: normalizeString(payload.profile?.email),
+    displayName: normalizeString(payload.profile?.displayName),
+    photoURL: normalizeString(payload.profile?.photoURL),
+    uid: normalizeString(payload.profile?.uid),
+    accessToken: normalizeString(payload.accessToken),
+    idToken: normalizeString(payload.idToken),
+    scope: normalizeString(payload.scope),
+    linkedAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+  };
+
+  await docRef.set(
+    {
+      'socialConnections.providers.google': googleData,
+      'socialConnections.providers.updatedAt': FieldValue.serverTimestamp(),
+      'socialConnections.updatedAt': FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  return {
+    provider: 'google',
+    email: googleData.email || null,
+    displayName: googleData.displayName || null,
+    photoURL: googleData.photoURL || null,
+  };
+});
+
+exports.unlinkGoogleProvider = onCall(async (request) => {
+  const { auth, data } = request;
+  if (!auth || !auth.uid) {
+    throw new HttpsError('unauthenticated', 'User authentication required');
+  }
+
+  const payload = data || {};
+  const appId = normalizeString(payload.appId);
+  if (!appId) {
+    throw new HttpsError('invalid-argument', 'appId is required');
+  }
+
+  const firestore = admin.firestore();
+  const docRef = firestore.doc(buildUserDocPath(appId, auth.uid));
+
+  await docRef.set(
+    {
+      'socialConnections.providers.google': FieldValue.delete(),
+      'socialConnections.providers.updatedAt': FieldValue.serverTimestamp(),
+      'socialConnections.updatedAt': FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  return {
+    provider: 'google',
+    status: 'unlinked',
+  };
 });

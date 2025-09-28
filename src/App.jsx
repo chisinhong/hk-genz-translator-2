@@ -11,6 +11,7 @@ import PrivacyPolicy from './pages/PrivacyPolicy';
 import Terms from './pages/Terms';
 import About from './pages/About';
 import ProfilePage from './pages/Profile';
+import MetaOAuthCallback from './pages/MetaOAuthCallback';
 import { ContributionProvider } from './utils/ContributionContext';
 import { TesterProvider, useTester } from './utils/TesterContext';
 import { TranslationUsageProvider } from './utils/TranslationUsageContext';
@@ -96,6 +97,7 @@ function App() {
                   <Routes>
                     <Route path="/" element={<AppContent />} />
                     <Route path="/settings" element={<ProfilePage />} />
+                    <Route path="/meta-callback" element={<MetaOAuthCallback />} />
                     <Route path="/privacy" element={<PrivacyPolicy />} />
                     <Route path="/terms" element={<Terms />} />
                     <Route path="/about" element={<About />} />

@@ -26,6 +26,7 @@ const AuthStatus = () => {
     isAnonymous,
     signIn,
     register,
+    signInWithGoogle,
     signOut,
   } = useAuth();
 
@@ -80,6 +81,18 @@ const AuthStatus = () => {
     }
   };
 
+  const handleGoogleSignIn = async () => {
+    setMessage('');
+    const result = await signInWithGoogle();
+    if (!result?.success) {
+      setMessage(result?.errorMessage || 'Google 登入失敗，請稍後再試。');
+      return;
+    }
+    setMessage('登入成功！');
+    setIsPanelOpen(false);
+    resetForm();
+  };
+
   const handleSignOut = async () => {
     setMessage('');
     const result = await signOut();
@@ -111,7 +124,36 @@ const AuthStatus = () => {
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-3">
+        <div className="space-y-3">
+          <button
+            type="button"
+            onClick={handleGoogleSignIn}
+            disabled={actionPending}
+            className="flex w-full items-center justify-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-800 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {actionPending ? (
+              <>
+                <Loader2 className="animate-spin" size={16} />
+                處理中...
+              </>
+            ) : (
+              <>
+                <span className="flex h-5 w-5 items-center justify-center rounded bg-white text-[13px] font-bold text-blue-600">
+                  G
+                </span>
+                使用 Google 登入
+              </>
+            )}
+          </button>
+
+          <div className="flex items-center gap-2 text-xs text-gray-400">
+            <span className="h-px flex-1 bg-gray-200" />
+            <span>或使用電子郵件</span>
+            <span className="h-px flex-1 bg-gray-200" />
+          </div>
+        </div>
+
+        <form onSubmit={handleSubmit} className="mt-3 space-y-3">
           <div>
             <label className="mb-1 block text-xs font-semibold text-gray-600">
               電郵

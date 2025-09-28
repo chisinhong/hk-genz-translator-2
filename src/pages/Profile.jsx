@@ -1,5 +1,5 @@
-import React, { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   CheckCircle2,
   Crown,
@@ -10,6 +10,13 @@ import {
   ExternalLink,
   Share2,
   UserPlus,
+  Instagram,
+  MessageCircle,
+  Link2,
+  Unlink,
+  Plug,
+  PlugZap,
+  AlertCircle,
 } from 'lucide-react';
 import { useAuth } from '../utils/AuthContext';
 import { useTranslationUsage } from '../utils/TranslationUsageContext';
@@ -20,6 +27,11 @@ import {
   SHARE_DAILY_CAP,
   SHARE_REWARD_PER_USE,
 } from '../services/tasksService';
+import {
+  startMetaOAuth,
+  unlinkMetaPlatform,
+  getMetaPlatformLabel,
+} from '../services/metaConnectService';
 
 const infoItemClass =
   'rounded-2xl bg-white/10 border border-white/10 px-4 py-5 text-left shadow-lg backdrop-blur';
@@ -41,6 +53,53 @@ const TIER_LABELS = {
 
 const shareDailyMax = SHARE_DAILY_CAP / SHARE_REWARD_PER_USE;
 
+const META_PLATFORM_LIST = ['threads', 'instagram'];
+
+const META_PLATFORM_DETAILS = {
+  threads: {
+    label: 'Threads',
+    description: '連結 Threads 以同步潮語更新與專屬互動。',
+    Icon: MessageCircle,
+  },
+  instagram: {
+    label: 'Instagram',
+    description: '連結 Instagram 以直接分享翻譯與追蹤官方帳號。',
+    Icon: Instagram,
+  },
+};
+
+const META_GENERAL_ERROR = '操作失敗，請稍後再試。';
+
+function sanitizeMetaError(rawMessage) {
+  if (!rawMessage || typeof rawMessage !== 'string') {
+    return META_GENERAL_ERROR;
+  }
+  const trimmed = rawMessage.trim();
+  if (!trimmed) return META_GENERAL_ERROR;
+  const spaceIndex = trimmed.indexOf(' ');
+  if (trimmed.startsWith('functions/') && spaceIndex > 0) {
+    return trimmed.slice(spaceIndex + 1).trim() || META_GENERAL_ERROR;
+  }
+  return trimmed;
+}
+
+function buildMetaErrorMessage(platformLabel, rawMessage) {
+  const cleaned = sanitizeMetaError(rawMessage);
+  if (cleaned.includes('App ID is not configured')) {
+    return `${platformLabel || 'Meta'} 設定未完成，請稍後再試。`;
+  }
+  if (cleaned.includes('OAuth flow can only run in the browser')) {
+    return `${platformLabel || 'Meta'} 授權需在瀏覽器中進行，請使用支援的瀏覽器重試。`;
+  }
+  if (cleaned === META_GENERAL_ERROR) {
+    return `${platformLabel || 'Meta'} 操作失敗，請稍後再試。`;
+  }
+  if (platformLabel && cleaned.startsWith(platformLabel)) {
+    return cleaned;
+  }
+  return `${platformLabel || 'Meta'} 操作失敗：${cleaned}`;
+}
+
 const ProfilePage = () => {
   const {
     user,
@@ -50,11 +109,14 @@ const ProfilePage = () => {
     shareBonus,
     dailyLimit: authDailyLimit,
     tasks,
+    socialConnections,
     loading: isAuthLoading,
     actionPending,
     error,
     isAnonymous,
     signOut,
+    signInWithGoogle,
+    unlinkGoogle,
     applyRemoteProfile,
     refreshProfile,
   } = useAuth();
@@ -66,9 +128,21 @@ const ProfilePage = () => {
     isLoading: isUsageLoading,
     refreshUsage,
   } = useTranslationUsage();
+  const location = useLocation();
+  const navigate = useNavigate();
 
   const [activeTaskId, setActiveTaskId] = useState(null);
   const [taskFeedback, setTaskFeedback] = useState(null);
+  const [metaFeedback, setMetaFeedback] = useState(null);
+  const [metaProcessing, setMetaProcessing] = useState(null);
+  const [googleFeedback, setGoogleFeedback] = useState(null);
+  const [googleProcessing, setGoogleProcessing] = useState(false);
+
+  const metaState = socialConnections?.meta ?? {};
+  const metaPlatforms = metaState.platforms ?? {};
+  const selectedMetaPlatform = metaState.selectedPlatform ?? null;
+  const providersState = socialConnections?.providers ?? {};
+  const googleConnection = providersState?.google ?? null;
 
   const normalizedTasks = useMemo(
     () => ({ ...DEFAULT_TASKS, ...(tasks || {}) }),
@@ -84,6 +158,8 @@ const ProfilePage = () => {
   const tierLabel = TIER_LABELS[tier] || TIER_LABELS.guest;
   const submissionsApproved = normalizedTasks.submissionsApproved || 0;
   const invitesCompleted = normalizedTasks.invitesCompleted || 0;
+  const canManageMeta = !isAnonymous;
+  const googleLinked = Boolean(googleConnection);
 
   const tasksConfig = useMemo(
     () => [
@@ -182,6 +258,165 @@ const ProfilePage = () => {
       submissionsApproved,
     ]
   );
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const metaStatus = params.get('meta');
+    if (!metaStatus) {
+      return;
+    }
+
+    const platformParam = params.get('platform') || '';
+    const reasonParam = params.get('reason') || '';
+    const platformLabel = platformParam
+      ? getMetaPlatformLabel(platformParam)
+      : 'Meta';
+
+    if (metaStatus === 'connected') {
+      setMetaFeedback({
+        type: 'success',
+        message: `${platformLabel} 已成功連結。`,
+      });
+      void refreshProfile();
+    } else if (metaStatus === 'error') {
+      setMetaFeedback({
+        type: 'error',
+        message:
+          reasonParam || `${platformLabel} 連結失敗，請稍後再試。`,
+      });
+    }
+
+    params.delete('meta');
+    params.delete('platform');
+    params.delete('reason');
+
+    const nextSearch = params.toString();
+    navigate(
+      {
+        pathname: location.pathname,
+        search: nextSearch ? `?${nextSearch}` : '',
+      },
+      { replace: true }
+    );
+  }, [location.pathname, location.search, navigate, refreshProfile]);
+
+  const handleMetaConnect = (platform) => {
+    if (!META_PLATFORM_LIST.includes(platform)) {
+      return;
+    }
+
+    if (!canManageMeta) {
+      setMetaFeedback({
+        type: 'error',
+        message: '請先登入帳戶後再連結社群平台。',
+      });
+      return;
+    }
+
+    setMetaFeedback(null);
+
+    try {
+      startMetaOAuth(platform);
+    } catch (metaError) {
+      console.error('Meta OAuth 發起失敗:', metaError);
+      const label = getMetaPlatformLabel(platform);
+      setMetaFeedback({
+        type: 'error',
+        message: buildMetaErrorMessage(label, metaError?.message),
+      });
+    }
+  };
+
+  const handleMetaUnlink = async (platform) => {
+    if (!META_PLATFORM_LIST.includes(platform)) {
+      return;
+    }
+
+    if (!canManageMeta) {
+      setMetaFeedback({
+        type: 'error',
+        message: '請先登入帳戶後再連結社群平台。',
+      });
+      return;
+    }
+
+    setMetaProcessing(platform);
+    setMetaFeedback(null);
+
+    try {
+      await unlinkMetaPlatform(platform);
+      await refreshProfile().catch(() => null);
+      const label = getMetaPlatformLabel(platform);
+      setMetaFeedback({
+        type: 'success',
+        message: `${label} 已解除連結。`,
+      });
+    } catch (metaError) {
+      console.error('Meta 平台解除連結失敗:', metaError);
+      const label = getMetaPlatformLabel(platform);
+      setMetaFeedback({
+        type: 'error',
+        message: buildMetaErrorMessage(label, metaError?.message),
+      });
+    } finally {
+      setMetaProcessing(null);
+    }
+  };
+
+  const handleGoogleConnect = async () => {
+    if (!canManageMeta) {
+      setGoogleFeedback({
+        type: 'error',
+        message: '請先登入帳戶後再連結 Google。',
+      });
+      return;
+    }
+
+    setGoogleProcessing(true);
+    setGoogleFeedback(null);
+
+    const result = await signInWithGoogle();
+    if (result?.success) {
+      setGoogleFeedback({
+        type: 'success',
+        message: 'Google 帳戶已成功連結。',
+      });
+      await refreshProfile().catch(() => null);
+    } else {
+      const errorMessage = result?.errorMessage || 'Google 連結失敗，請稍後再試。';
+      setGoogleFeedback({ type: 'error', message: errorMessage });
+    }
+
+    setGoogleProcessing(false);
+  };
+
+  const handleGoogleUnlink = async () => {
+    if (!canManageMeta) {
+      setGoogleFeedback({
+        type: 'error',
+        message: '請先登入帳戶後再管理 Google 連結。',
+      });
+      return;
+    }
+
+    setGoogleProcessing(true);
+    setGoogleFeedback(null);
+
+    const result = await unlinkGoogle();
+    if (result?.success) {
+      setGoogleFeedback({
+        type: 'success',
+        message: 'Google 連結已解除。',
+      });
+      await refreshProfile().catch(() => null);
+    } else {
+      const errorMessage =
+        result?.error?.message || '解除 Google 連結失敗，請稍後再試。';
+      setGoogleFeedback({ type: 'error', message: errorMessage });
+    }
+
+    setGoogleProcessing(false);
+  };
 
   const handleTaskCompletion = async (
     task,
@@ -383,6 +618,284 @@ const ProfilePage = () => {
               <span>{storageMode === 'remote' ? '雲端' : '本機快取'}</span>
             </div>
           </div>
+        </div>
+      </section>
+
+      <section className="mt-10">
+        <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h2 className="text-2xl font-semibold">登入方式</h2>
+            <p className="text-sm text-white/70">
+              連結 Google 帳戶即可快速登入並保留任務進度與翻譯紀錄。
+            </p>
+          </div>
+        </div>
+
+        {googleFeedback && (
+          <div
+            className={`mb-4 rounded-2xl border px-4 py-3 text-sm ${
+              googleFeedback.type === 'success'
+                ? 'border-emerald-300/40 bg-emerald-500/20 text-emerald-100'
+                : 'border-red-300/40 bg-red-500/20 text-red-100'
+            }`}
+          >
+            <div className="flex items-start gap-2">
+              {googleFeedback.type === 'success' ? (
+                <CheckCircle2 size={16} />
+              ) : (
+                <AlertCircle size={16} />
+              )}
+              <span>{googleFeedback.message}</span>
+            </div>
+          </div>
+        )}
+
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="flex h-full flex-col justify-between rounded-2xl border border-white/10 bg-white/8 p-5">
+            <div>
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-white text-lg font-bold text-indigo-900">
+                    G
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-semibold">Google 帳戶</h3>
+                    <p className="mt-2 text-sm text-white/70">
+                      使用 Google 登入即可同步翻譯額度與任務成果，無需記住額外密碼。
+                    </p>
+                  </div>
+                </div>
+                {googleLinked ? (
+                  <span className="inline-flex items-center gap-1 rounded-full border border-emerald-400/40 bg-emerald-500/20 px-3 py-1 text-xs font-semibold text-emerald-100">
+                    <CheckCircle2 size={14} /> 已連結
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 rounded-full border border-white/15 bg-white/10 px-3 py-1 text-xs font-semibold text-white/70">
+                    <Plug size={14} /> 未連結
+                  </span>
+                )}
+              </div>
+
+              {googleLinked ? (
+                <div className="mt-4 space-y-2 text-sm text-white/75">
+                  {googleConnection?.email && (
+                    <p>電郵：{googleConnection.email}</p>
+                  )}
+                  {googleConnection?.displayName && (
+                    <p>名稱：{googleConnection.displayName}</p>
+                  )}
+                  <p className="flex items-center gap-2 text-emerald-200">
+                    <PlugZap size={16} /> 已設為快速登入方式
+                  </p>
+                </div>
+              ) : (
+                <p className="mt-4 flex items-center gap-2 text-sm text-white/60">
+                  <Plug size={16} className="text-white/50" />
+                  尚未連結，立即綁定即可快速登入並保留雲端紀錄。
+                </p>
+              )}
+
+              {!canManageMeta && (
+                <p className="mt-3 text-xs text-white/50">
+                  登入帳戶即可管理 Google 連結。
+                </p>
+              )}
+            </div>
+
+            <div className="mt-6 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={handleGoogleConnect}
+                disabled={googleProcessing || actionPending}
+                className="inline-flex items-center gap-2 rounded-xl bg-white/80 px-4 py-2 text-sm font-semibold text-indigo-900 transition hover:bg-white disabled:cursor-not-allowed disabled:bg-white/50"
+              >
+                {googleProcessing ? (
+                  <>
+                    <Loader2 size={16} className="animate-spin" />
+                    處理中...
+                  </>
+                ) : googleLinked ? (
+                  <>
+                    <PlugZap size={16} /> 重新連結
+                  </>
+                ) : (
+                  <>
+                    <Link2 size={16} /> 使用 Google 連結
+                  </>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={handleGoogleUnlink}
+                disabled={!googleLinked || googleProcessing || actionPending}
+                className="inline-flex items-center gap-2 rounded-xl bg-red-500/80 px-3 py-2 text-xs font-semibold text-white transition hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {googleProcessing ? (
+                  <>
+                    <Loader2 size={14} className="animate-spin" />
+                    處理中...
+                  </>
+                ) : (
+                  <>
+                    <Unlink size={14} /> 解除連結
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="mt-10">
+        <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h2 className="text-2xl font-semibold">社群連結</h2>
+            <p className="text-sm text-white/70">
+              與官方 Threads 或 Instagram 帳號連結，即可同步任務與社群互動。
+            </p>
+          </div>
+        </div>
+
+        {metaFeedback && (
+          <div
+            className={`mb-4 rounded-2xl border px-4 py-3 text-sm ${
+              metaFeedback.type === 'success'
+                ? 'border-emerald-300/40 bg-emerald-500/20 text-emerald-100'
+                : 'border-red-300/40 bg-red-500/20 text-red-100'
+            }`}
+          >
+            <div className="flex items-start gap-2">
+              {metaFeedback.type === 'success' ? (
+                <CheckCircle2 size={16} />
+              ) : (
+                <AlertCircle size={16} />
+              )}
+              <span>{metaFeedback.message}</span>
+            </div>
+          </div>
+        )}
+
+        <div className="grid gap-4 md:grid-cols-2">
+          {META_PLATFORM_LIST.map((platform) => {
+            const { label, description, Icon } = META_PLATFORM_DETAILS[platform];
+            const connection = metaPlatforms?.[platform] ?? null;
+            const isLinked = Boolean(connection);
+            const isActive = isLinked && selectedMetaPlatform === platform;
+            const profile = connection?.profile ?? null;
+            const profileName = profile?.username || profile?.name || '';
+            const accountType = profile?.accountType || '';
+            const isBusy = metaProcessing !== null;
+            const connectDisabled = !canManageMeta || isBusy;
+            const unlinkDisabled =
+              !isLinked || !canManageMeta || metaProcessing === platform || actionPending;
+
+            return (
+              <div
+                key={platform}
+                className="flex h-full flex-col justify-between rounded-2xl border border-white/10 bg-white/8 p-5"
+              >
+                <div>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-start gap-3">
+                      <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-white/10 text-white">
+                        <Icon size={24} />
+                      </div>
+                      <div>
+                        <h3 className="text-lg font-semibold">{label}</h3>
+                        <p className="mt-2 text-sm text-white/70">{description}</p>
+                      </div>
+                    </div>
+                    {isLinked ? (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-emerald-400/40 bg-emerald-500/20 px-3 py-1 text-xs font-semibold text-emerald-100">
+                        <CheckCircle2 size={14} /> 已連結
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-white/15 bg-white/10 px-3 py-1 text-xs font-semibold text-white/70">
+                        <Plug size={14} /> 未連結
+                      </span>
+                    )}
+                  </div>
+
+                  {isLinked ? (
+                    <div className="mt-4 space-y-2 text-sm text-white/75">
+                      {profileName && (
+                        <p>
+                          帳號：
+                          {profileName.startsWith('@')
+                            ? profileName
+                            : `@${profileName}`}
+                        </p>
+                      )}
+                      {accountType && <p>帳號類型：{accountType}</p>}
+                      {isActive ? (
+                        <p className="flex items-center gap-2 text-emerald-200">
+                          <PlugZap size={16} /> 已設定為預設分享平台
+                        </p>
+                      ) : (
+                        <p className="flex items-center gap-2 text-white/60">
+                          <AlertCircle size={16} className="text-white/40" />
+                          已連結，欲切換預設分享平台時可重新連結此平台。
+                        </p>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="mt-4 flex items-center gap-2 text-sm text-white/60">
+                      <Plug size={16} className="text-white/50" />
+                      尚未連結，完成授權後可同步任務完成度。
+                    </p>
+                  )}
+
+                  {!canManageMeta && (
+                    <p className="mt-3 text-xs text-white/50">
+                      登入帳戶即可管理社群連結。
+                    </p>
+                  )}
+                </div>
+
+                <div className="mt-6 flex flex-wrap gap-2">
+                  {isLinked ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => handleMetaConnect(platform)}
+                        disabled={connectDisabled}
+                        className="inline-flex items-center gap-2 rounded-xl border border-white/20 px-3 py-2 text-xs font-semibold text-white/80 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <PlugZap size={14} /> 重新連結
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleMetaUnlink(platform)}
+                        disabled={unlinkDisabled}
+                        className="inline-flex items-center gap-2 rounded-xl bg-red-500/80 px-3 py-2 text-xs font-semibold text-white transition hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {metaProcessing === platform ? (
+                          <>
+                            <Loader2 size={14} className="animate-spin" />
+                            處理中...
+                          </>
+                        ) : (
+                          <>
+                            <Unlink size={14} /> 解除連結
+                          </>
+                        )}
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => handleMetaConnect(platform)}
+                      disabled={connectDisabled}
+                      className="inline-flex items-center gap-2 rounded-xl bg-white/80 px-4 py-2 text-sm font-semibold text-indigo-900 transition hover:bg-white disabled:cursor-not-allowed disabled:bg-white/50"
+                    >
+                      <Link2 size={16} /> 立即連結
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
       </section>
 

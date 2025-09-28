@@ -10,12 +10,17 @@ import React, {
 } from 'react';
 import {
   EmailAuthProvider,
+  GoogleAuthProvider,
   createUserWithEmailAndPassword,
   linkWithCredential,
+  linkWithPopup,
   onAuthStateChanged,
   signInAnonymously,
   signInWithEmailAndPassword,
+  signInWithPopup,
+  signInWithCredential,
   signOut,
+  unlink,
   updateProfile,
 } from 'firebase/auth';
 import { ensureFirebaseApp } from '../services/firebaseApp';
@@ -23,6 +28,10 @@ import {
   ensureUserTierProfile,
   subscribeToUserProfile,
 } from '../services/userProfile';
+import {
+  syncGoogleConnection,
+  unlinkGoogleConnection,
+} from '../services/googleAuthService';
 
 const BASE_LIMITS = {
   guest: 3,
@@ -44,8 +53,77 @@ const DEFAULT_TASKS = {
   sharesRecordedAt: null,
 };
 
+const META_PLATFORMS = ['instagram', 'threads'];
+const GOOGLE_SCOPES = ['profile', 'email'];
+
+function createDefaultSocialConnections() {
+  return {
+    meta: {
+      selectedPlatform: null,
+      updatedAt: null,
+      platforms: META_PLATFORMS.reduce((acc, platform) => {
+        acc[platform] = null;
+        return acc;
+      }, {}),
+    },
+    providers: {
+      google: null,
+      updatedAt: null,
+    },
+  };
+}
+
 function createEmptyTasks() {
   return { ...DEFAULT_TASKS };
+}
+
+function isObjectLike(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function normalizeSocialConnections(rawConnections = null) {
+  if (!isObjectLike(rawConnections)) {
+    return createDefaultSocialConnections();
+  }
+
+  const meta = isObjectLike(rawConnections.meta)
+    ? rawConnections.meta
+    : {};
+  const platforms = isObjectLike(meta.platforms) ? meta.platforms : {};
+
+  const normalizedPlatforms = META_PLATFORMS.reduce((acc, platform) => {
+    const platformData = platforms[platform];
+    acc[platform] = isObjectLike(platformData) ? platformData : null;
+    return acc;
+  }, {});
+
+  const selected =
+    meta.selectedPlatform === 'instagram' || meta.selectedPlatform === 'threads'
+      ? meta.selectedPlatform
+      : null;
+
+  return {
+    meta: {
+      selectedPlatform: selected,
+      updatedAt: meta.updatedAt ?? null,
+      platforms: normalizedPlatforms,
+    },
+    providers: {
+      google: isObjectLike(rawConnections.providers)
+        ? rawConnections.providers.google || null
+        : null,
+      updatedAt: isObjectLike(rawConnections.providers)
+        ? rawConnections.providers.updatedAt || null
+        : null,
+    },
+  };
+}
+
+function createGoogleProvider() {
+  const provider = new GoogleAuthProvider();
+  GOOGLE_SCOPES.forEach((scope) => provider.addScope(scope));
+  provider.setCustomParameters({ prompt: 'select_account' });
+  return provider;
 }
 
 function getTodayKey() {
@@ -97,6 +175,7 @@ const DEFAULT_STATE = {
   shareBonus: 0,
   dailyLimit: BASE_LIMITS.guest,
   tasks: createEmptyTasks(),
+  socialConnections: createDefaultSocialConnections(),
   loading: true,
   actionPending: false,
   error: null,
@@ -112,6 +191,7 @@ export const AuthProvider = ({ children }) => {
     shareBonus,
     dailyLimit,
     tasks,
+    socialConnections,
     loading,
     actionPending,
     error,
@@ -147,6 +227,10 @@ export const AuthProvider = ({ children }) => {
           ? BASE_LIMITS.pro
           : resolvedBaseLimit + resolvedPermanentBoost + resolvedShareBonus;
 
+      const resolvedSocialConnections = normalizeSocialConnections(
+        profileData?.socialConnections
+      );
+
       return {
         ...prev,
         user: resolvedUser ?? prev.user,
@@ -156,6 +240,7 @@ export const AuthProvider = ({ children }) => {
         shareBonus: resolvedShareBonus,
         dailyLimit: resolvedDailyLimit,
         tasks: normalizedTasks,
+        socialConnections: resolvedSocialConnections,
         loading: false,
         actionPending: false,
         error: null,
@@ -180,6 +265,7 @@ export const AuthProvider = ({ children }) => {
           shareBonus: 0,
           dailyLimit: BASE_LIMITS.guest,
           tasks: createEmptyTasks(),
+          socialConnections: createDefaultSocialConnections(),
           loading: false,
           actionPending: false,
           error: initError,
@@ -223,6 +309,7 @@ export const AuthProvider = ({ children }) => {
               tier: 'guest',
               loading: false,
               actionPending: false,
+              socialConnections: createDefaultSocialConnections(),
               error: authError,
             });
           }
@@ -346,6 +433,127 @@ export const AuthProvider = ({ children }) => {
     [setActionState, applyProfileData]
   );
 
+  const signInWithGoogle = useCallback(async () => {
+    const { auth } = ensureFirebaseApp();
+    setActionState(true);
+
+    const provider = createGoogleProvider();
+    const scopeString = GOOGLE_SCOPES.join(' ');
+
+    try {
+      const currentUser = auth.currentUser;
+      const hasCurrentUser = Boolean(currentUser);
+      const hasGoogleLinked = hasCurrentUser
+        ? currentUser.providerData?.some((info) => info?.providerId === 'google.com')
+        : false;
+
+      let userCredential;
+      if (hasCurrentUser && !hasGoogleLinked) {
+        userCredential = await linkWithPopup(currentUser, provider);
+      } else {
+        userCredential = await signInWithPopup(auth, provider);
+      }
+
+      const { user } = userCredential;
+      const credential = GoogleAuthProvider.credentialFromResult(
+        userCredential
+      );
+      const providerData = user?.providerData?.find(
+        (item) => item?.providerId === 'google.com'
+      );
+
+      await syncGoogleConnection({
+        accessToken: credential?.accessToken || null,
+        idToken: credential?.idToken || null,
+        profile: providerData
+          ? {
+              email: providerData.email,
+              displayName: providerData.displayName,
+              photoURL: providerData.photoURL,
+              uid: providerData.uid,
+              providerId: providerData.providerId,
+            }
+          : {},
+        scope: scopeString,
+      });
+
+      const profile = await ensureUserTierProfile();
+      applyProfileData(profile, user);
+      setActionState(false, null);
+
+      return { success: true };
+    } catch (googleError) {
+      if (googleError?.code === 'auth/credential-already-in-use') {
+        const takeoverCredentialRaw =
+          GoogleAuthProvider.credentialFromError(googleError) ||
+          googleError?.customData?.credential ||
+          null;
+        const takeoverCredential =
+          takeoverCredentialRaw &&
+          typeof takeoverCredentialRaw === 'object' &&
+          'providerId' in takeoverCredentialRaw
+            ? takeoverCredentialRaw
+            : null;
+
+        if (takeoverCredential) {
+          try {
+            const takeoverResult = await signInWithCredential(
+              auth,
+              takeoverCredential
+            );
+
+            const { user } = takeoverResult;
+            const credentialFromResult =
+              GoogleAuthProvider.credentialFromResult(takeoverResult);
+            const providerData = user?.providerData?.find(
+              (item) => item?.providerId === 'google.com'
+            );
+
+            await syncGoogleConnection({
+              accessToken: credentialFromResult?.accessToken || null,
+              idToken: credentialFromResult?.idToken || null,
+              profile: providerData
+                ? {
+                    email: providerData.email,
+                    displayName: providerData.displayName,
+                    photoURL: providerData.photoURL,
+                    uid: providerData.uid,
+                    providerId: providerData.providerId,
+                  }
+                : {},
+              scope: scopeString,
+            });
+
+            const profile = await ensureUserTierProfile();
+            applyProfileData(profile, user);
+            setActionState(false, null);
+
+            return { success: true, switchedUser: true };
+          } catch (takeoverError) {
+            console.error('接手現有 Google 帳號失敗:', takeoverError);
+            setActionState(false, takeoverError);
+            return {
+              success: false,
+              error: takeoverError,
+              errorCode: takeoverError?.code || 'unknown',
+              errorMessage:
+                takeoverError?.message || 'Google 登入失敗，請稍後再試。',
+            };
+          }
+        }
+      }
+
+      console.error('Google 登入失敗:', googleError);
+      setActionState(false, googleError);
+      return {
+        success: false,
+        error: googleError,
+        errorCode: googleError?.code || 'unknown',
+        errorMessage: googleError?.message || 'Google 登入失敗，請稍後再試。',
+      };
+    }
+  }, [applyProfileData, setActionState]);
+
   const signOutUser = useCallback(async () => {
     const { auth } = ensureFirebaseApp();
     setActionState(true);
@@ -359,6 +567,7 @@ export const AuthProvider = ({ children }) => {
         shareBonus: 0,
         dailyLimit: BASE_LIMITS.guest,
         tasks: createEmptyTasks(),
+        socialConnections: createDefaultSocialConnections(),
         loading: false,
         actionPending: false,
         error: null,
@@ -371,6 +580,39 @@ export const AuthProvider = ({ children }) => {
       return { success: false, error: signOutError };
     }
   }, [setActionState]);
+
+  const unlinkGoogle = useCallback(async () => {
+    const { auth } = ensureFirebaseApp();
+    const currentUser = auth.currentUser;
+    if (!currentUser) {
+      return {
+        success: false,
+        error: new Error('尚未登入，無法解除 Google 連結。'),
+      };
+    }
+
+    setActionState(true);
+
+    try {
+      try {
+        await unlink(currentUser, 'google.com');
+      } catch (unlinkError) {
+        if (unlinkError?.code !== 'auth/no-such-provider') {
+          throw unlinkError;
+        }
+      }
+
+      await unlinkGoogleConnection();
+      const profile = await ensureUserTierProfile();
+      applyProfileData(profile, auth.currentUser);
+      setActionState(false, null);
+      return { success: true };
+    } catch (unlinkError) {
+      console.error('解除 Google 連結失敗:', unlinkError);
+      setActionState(false, unlinkError);
+      return { success: false, error: unlinkError };
+    }
+  }, [applyProfileData, setActionState]);
 
   const refreshProfile = useCallback(async () => {
     try {
@@ -393,12 +635,15 @@ export const AuthProvider = ({ children }) => {
       shareBonus,
       dailyLimit,
       tasks,
+      socialConnections,
       loading,
       actionPending,
       error,
       signIn,
       register,
+      signInWithGoogle,
       signOut: signOutUser,
+      unlinkGoogle,
       isAnonymous: user?.isAnonymous ?? true,
       applyRemoteProfile: applyProfileData,
       refreshProfile,
@@ -411,12 +656,15 @@ export const AuthProvider = ({ children }) => {
       shareBonus,
       dailyLimit,
       tasks,
+      socialConnections,
       loading,
       actionPending,
       error,
       signIn,
       register,
+      signInWithGoogle,
       signOutUser,
+      unlinkGoogle,
       applyProfileData,
       refreshProfile,
     ]
