@@ -10,8 +10,17 @@ let syncCallable;
 let unlinkCallable;
 
 async function ensureCallables() {
-  ensureFirebaseApp();
+  const { auth } = ensureFirebaseApp();
   await ensureAuthUser();
+
+  if (auth?.currentUser) {
+    try {
+      await auth.currentUser.getIdToken(true);
+    } catch (error) {
+      console.warn('Failed to refresh ID token before syncGoogleProvider', error);
+    }
+  }
+
   const functionsInstance = getFirebaseFunctions();
   if (!syncCallable) {
     syncCallable = httpsCallable(functionsInstance, 'syncGoogleProvider');

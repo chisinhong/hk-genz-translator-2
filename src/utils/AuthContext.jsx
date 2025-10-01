@@ -202,16 +202,22 @@ export const AuthProvider = ({ children }) => {
     setState((prev) => {
       const resolvedUser = userOverride ?? prev.user;
       const tierFromProfile = profileData?.tier;
-      const resolvedTier = tierFromProfile
-        || defaultTierForUser(resolvedUser)
+      let resolvedTier = tierFromProfile
         || prev.tier
+        || defaultTierForUser(resolvedUser)
         || 'guest';
+
+      if (resolvedUser && !resolvedUser.isAnonymous && resolvedTier === 'guest') {
+        resolvedTier = 'registered';
+      }
 
       const normalizedTasks = normalizeTasks(profileData?.tasks);
 
-      const resolvedBaseLimit = Number.isFinite(profileData?.baseLimit)
+      const minimumBaseLimit = baseLimitForTier(resolvedTier);
+      const resolvedBaseLimitRaw = Number.isFinite(profileData?.baseLimit)
         ? profileData.baseLimit
-        : baseLimitForTier(resolvedTier);
+        : minimumBaseLimit;
+      const resolvedBaseLimit = Math.max(resolvedBaseLimitRaw, minimumBaseLimit);
 
       const resolvedPermanentBoost = Number.isFinite(profileData?.permanentBoost)
         ? profileData.permanentBoost
@@ -221,11 +227,23 @@ export const AuthProvider = ({ children }) => {
         ? profileData.shareBonus
         : calculateShareBonus(normalizedTasks);
 
-      const resolvedDailyLimit = Number.isFinite(profileData?.dailyLimit)
+      const minimumDailyLimit =
+        resolvedTier === 'pro'
+          ? BASE_LIMITS.pro
+          : baseLimitForTier(resolvedTier) +
+            resolvedPermanentBoost +
+            resolvedShareBonus;
+
+      const resolvedDailyLimitRaw = Number.isFinite(profileData?.dailyLimit)
         ? profileData.dailyLimit
         : resolvedTier === 'pro'
           ? BASE_LIMITS.pro
           : resolvedBaseLimit + resolvedPermanentBoost + resolvedShareBonus;
+
+      const resolvedDailyLimit = Math.max(
+        resolvedDailyLimitRaw,
+        minimumDailyLimit
+      );
 
       const resolvedSocialConnections = normalizeSocialConnections(
         profileData?.socialConnections
@@ -462,7 +480,7 @@ export const AuthProvider = ({ children }) => {
         (item) => item?.providerId === 'google.com'
       );
 
-      await syncGoogleConnection({
+      const syncResult = await syncGoogleConnection({
         accessToken: credential?.accessToken || null,
         idToken: credential?.idToken || null,
         profile: providerData
@@ -476,6 +494,31 @@ export const AuthProvider = ({ children }) => {
           : {},
         scope: scopeString,
       });
+
+      const nowIso = new Date().toISOString();
+      setState((prev) => ({
+        ...prev,
+        socialConnections: {
+          ...prev.socialConnections,
+          providers: {
+            ...(prev.socialConnections?.providers ?? {}),
+            google: {
+              email:
+                syncResult?.email ?? providerData?.email ?? null,
+              displayName:
+                syncResult?.displayName ?? providerData?.displayName ?? null,
+              photoURL:
+                syncResult?.photoURL ?? providerData?.photoURL ?? null,
+              uid: providerData?.uid ?? null,
+              providerId: 'google.com',
+              linkedAt:
+                prev.socialConnections?.providers?.google?.linkedAt || nowIso,
+              updatedAt: nowIso,
+            },
+            updatedAt: nowIso,
+          },
+        },
+      }));
 
       const profile = await ensureUserTierProfile();
       applyProfileData(profile, user);
@@ -524,6 +567,47 @@ export const AuthProvider = ({ children }) => {
               scope: scopeString,
             });
 
+            const syncResult = await syncGoogleConnection({
+              accessToken: credentialFromResult?.accessToken || null,
+              idToken: credentialFromResult?.idToken || null,
+              profile: providerData
+                ? {
+                    email: providerData.email,
+                    displayName: providerData.displayName,
+                    photoURL: providerData.photoURL,
+                    uid: providerData.uid,
+                    providerId: providerData.providerId,
+                  }
+                : {},
+              scope: scopeString,
+            });
+
+            const takeoverIso = new Date().toISOString();
+            setState((prev) => ({
+              ...prev,
+              socialConnections: {
+                ...prev.socialConnections,
+                providers: {
+                  ...(prev.socialConnections?.providers ?? {}),
+                  google: {
+                    email:
+                      syncResult?.email ?? providerData?.email ?? null,
+                    displayName:
+                      syncResult?.displayName ?? providerData?.displayName ?? null,
+                    photoURL:
+                      syncResult?.photoURL ?? providerData?.photoURL ?? null,
+                    uid: providerData?.uid ?? null,
+                    providerId: 'google.com',
+                    linkedAt:
+                      prev.socialConnections?.providers?.google?.linkedAt ||
+                      takeoverIso,
+                    updatedAt: takeoverIso,
+                  },
+                  updatedAt: takeoverIso,
+                },
+              },
+            }));
+
             const profile = await ensureUserTierProfile();
             applyProfileData(profile, user);
             setActionState(false, null);
@@ -552,7 +636,7 @@ export const AuthProvider = ({ children }) => {
         errorMessage: googleError?.message || 'Google 登入失敗，請稍後再試。',
       };
     }
-  }, [applyProfileData, setActionState]);
+  }, [applyProfileData, ensureUserTierProfile, setActionState, setState]);
 
   const signOutUser = useCallback(async () => {
     const { auth } = ensureFirebaseApp();
@@ -605,6 +689,18 @@ export const AuthProvider = ({ children }) => {
       await unlinkGoogleConnection();
       const profile = await ensureUserTierProfile();
       applyProfileData(profile, auth.currentUser);
+      const nowIso = new Date().toISOString();
+      setState((prev) => ({
+        ...prev,
+        socialConnections: {
+          ...prev.socialConnections,
+          providers: {
+            ...(prev.socialConnections?.providers ?? {}),
+            google: null,
+            updatedAt: nowIso,
+          },
+        },
+      }));
       setActionState(false, null);
       return { success: true };
     } catch (unlinkError) {
@@ -612,7 +708,7 @@ export const AuthProvider = ({ children }) => {
       setActionState(false, unlinkError);
       return { success: false, error: unlinkError };
     }
-  }, [applyProfileData, setActionState]);
+  }, [applyProfileData, setActionState, setState, unlinkGoogleConnection]);
 
   const refreshProfile = useCallback(async () => {
     try {

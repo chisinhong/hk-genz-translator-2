@@ -1,6 +1,6 @@
 /* eslint-env node */
 
-const { onCall, onRequest, HttpsError } = require('firebase-functions/v2/https');
+const { onCall, HttpsError } = require('firebase-functions/v2/https');
 const logger = require('firebase-functions/logger');
 const admin = require('firebase-admin');
 
@@ -384,32 +384,41 @@ exports.validateQuota = onCall(async (request) => {
   };
 });
 
-exports.ensureUserTier = onRequest({ cors: true }, async (req, res) => {
+exports.ensureUserTier = onCall(async (request) => {
+  if (!request.auth) {
+    throw new HttpsError(
+      'unauthenticated',
+      'Authentication is required to manage user tier.'
+    );
+  }
+
+  const data = request.data || {};
+
+  const appId = typeof data.appId === 'string' ? data.appId : 'default-app-id';
+  const userId = request.auth.uid;
+
   try {
-    const idToken = req.headers.authorization?.split('Bearer ')[1];
-    if (!idToken) {
-      throw new HttpsError(
-        'unauthenticated',
-        'Authentication is required to manage user tier.'
-      );
-    }
-
-    const decodedToken = await admin.auth().verifyIdToken(idToken);
-    const contextAuth = { uid: decodedToken.uid, token: decodedToken };
-    const data = req.body?.data || {};
-
-    const appId = typeof data.appId === 'string' ? data.appId : 'default-app-id';
-    const userId = contextAuth.uid;
     const firestore = admin.firestore();
     const userDocRef = firestore.doc(
       `${getUsersCollectionPath(appId)}/${userId}`
     );
 
+    const defaultTier = resolveDefaultTier({ token: request.auth.token });
     const snapshot = await userDocRef.get();
     let normalized = normalizeUserDoc(
       snapshot.exists ? snapshot.data() : null,
-      resolveDefaultTier(contextAuth)
+      defaultTier
     );
+    const defaultDailyLimit =
+      defaultTier === 'registered' ? DEFAULT_REGISTERED_LIMIT : DEFAULT_GUEST_LIMIT;
+
+    if (normalized.tier === 'guest' && defaultTier === 'registered') {
+      normalized = {
+        ...normalized,
+        tier: 'registered',
+        baseLimit: determineBaseLimit('registered'),
+      };
+    }
 
     if (!normalized.sharesFresh && normalized.sharesToday) {
       normalized = {
@@ -425,6 +434,14 @@ exports.ensureUserTier = onRequest({ cors: true }, async (req, res) => {
     }
 
     const payload = buildProfilePayload(userId, normalized, appId);
+    const finalDailyLimit =
+      normalized.tier === 'pro'
+        ? PRO_LIMIT
+        : Math.max(payload.dailyLimit, defaultDailyLimit);
+    const finalPayload = {
+      ...payload,
+      dailyLimit: finalDailyLimit,
+    };
 
     const updates = {
       tier: normalized.tier,
@@ -432,7 +449,7 @@ exports.ensureUserTier = onRequest({ cors: true }, async (req, res) => {
       tasks: normalized.tasks,
       permanentBoost: normalized.permanentBoost,
       shareBonus: normalized.shareBonus,
-      dailyLimit: payload.dailyLimit,
+      dailyLimit: finalDailyLimit,
       updatedAt: FieldValue.serverTimestamp(),
     };
 
@@ -444,21 +461,16 @@ exports.ensureUserTier = onRequest({ cors: true }, async (req, res) => {
 
     logger.info('ensure_user_tier_success', {
       userId,
-      tier: payload.tier,
-      dailyLimit: payload.dailyLimit,
+      tier: finalPayload.tier,
+      dailyLimit: finalPayload.dailyLimit,
     });
 
-    res.json({ data: payload });
+    return finalPayload;
   } catch (error) {
     logger.error('ensure_user_tier_error', error);
-    const code = error.code || 'internal';
-    const status = code === 'unauthenticated' ? 401 : 500;
-    res.status(status).json({
-      error: {
-        code,
-        message: error.message,
-      },
-    });
+    throw error instanceof HttpsError
+      ? error
+      : new HttpsError('internal', error.message || 'Failed to ensure user tier');
   }
 });
 

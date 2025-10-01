@@ -149,7 +149,9 @@ export function TranslationUsageProvider({
   }, [isAuthLoading, user, authDailyLimit]);
 
   useEffect(() => {
-    setState((prev) => ({ ...prev, dailyLimit }));
+    if (dailyLimit !== DEFAULT_DAILY_LIMIT) {
+      setState((prev) => ({ ...prev, dailyLimit }));
+    }
   }, [dailyLimit]);
 
   const refreshUsage = useCallback(async () => {
