@@ -59,7 +59,7 @@ function AppContent() {
           /> */}
         </div>
 
-        <div className="mt-20">
+        {/* <div className="mt-20">
           <h3 className="text-2xl font-bold mb-6">📊 即時統計</h3>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 max-w-4xl mx-auto">
             <StatCard
@@ -77,7 +77,7 @@ function AppContent() {
             <StatCard icon="✨" value="+892" label="本週新詞" percentage="" />
             <StatCard icon="⏱️" value="0.3s" label="平均響應" percentage="" />
           </div>
-        </div>
+        </div> */}
       </main>
       <Footer />
     </>
@@ -115,7 +115,10 @@ function App() {
                   <Routes>
                     <Route path="/" element={<AppContent />} />
                     <Route path="/settings" element={<ProfilePage />} />
-                    <Route path="/meta-callback" element={<MetaOAuthCallback />} />
+                    <Route
+                      path="/meta-callback"
+                      element={<MetaOAuthCallback />}
+                    />
                     <Route path="/privacy" element={<PrivacyPolicy />} />
                     <Route path="/terms" element={<Terms />} />
                     <Route path="/about" element={<About />} />
