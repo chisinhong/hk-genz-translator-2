@@ -86,6 +86,24 @@ function AppContent() {
 
 // 外層包住 Provider
 function App() {
+  if (import.meta.env.DEV && typeof window !== 'undefined') {
+    window.dumpIdToken = async () => {
+      try {
+        const auth = getAuth();
+        if (!auth.currentUser) {
+          console.warn('No Firebase user is signed in.');
+          return null;
+        }
+        const token = await auth.currentUser.getIdToken(true);
+        console.log('Firebase ID token:', token);
+        return token;
+      } catch (error) {
+        console.error('Failed to fetch ID token:', error);
+        return null;
+      }
+    };
+  }
+
   return (
     <TesterProvider>
       <ContributionProvider>
@@ -113,3 +131,4 @@ function App() {
 }
 
 export default App;
+import { getAuth } from 'firebase/auth';

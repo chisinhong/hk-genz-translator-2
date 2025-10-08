@@ -11,10 +11,12 @@ import React, {
 import {
   EmailAuthProvider,
   GoogleAuthProvider,
+  browserLocalPersistence,
   createUserWithEmailAndPassword,
   linkWithCredential,
   linkWithPopup,
   onAuthStateChanged,
+  setPersistence,
   signInAnonymously,
   signInWithEmailAndPassword,
   signInWithPopup,
@@ -197,6 +199,17 @@ export const AuthProvider = ({ children }) => {
     error,
   } = state;
   const unsubscribeProfileRef = useRef(null);
+
+  useEffect(() => {
+    try {
+      const { auth } = ensureFirebaseApp();
+      void setPersistence(auth, browserLocalPersistence).catch((error) => {
+        console.warn('設定 Firebase 認證持久化失敗:', error);
+      });
+    } catch (error) {
+      console.warn('初始化 Firebase 認證持久化時發生錯誤:', error);
+    }
+  }, []);
 
   const applyProfileData = useCallback((profileData, userOverride = null) => {
     setState((prev) => {

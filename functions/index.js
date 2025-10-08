@@ -3,6 +3,7 @@
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
 const logger = require('firebase-functions/logger');
 const admin = require('firebase-admin');
+const crypto = require('node:crypto');
 
 if (!admin.apps.length) {
   admin.initializeApp();
@@ -600,6 +601,217 @@ exports.completeTask = onCall(async (request) => {
   });
 
   return result;
+});
+
+const PROVIDER_CONFIG = {
+  google: {
+    tokenEndpoint:
+      process.env.GOOGLE_OAUTH_TOKEN_ENDPOINT ||
+      'https://oauth2.googleapis.com/token',
+    clientId: process.env.GOOGLE_OAUTH_CLIENT_ID || '',
+    clientSecret: process.env.GOOGLE_OAUTH_CLIENT_SECRET || '',
+    defaultScopes: process.env.GOOGLE_OAUTH_SCOPES || 'openid email profile',
+  },
+};
+
+const REFRESH_BUFFER_MS = Number(
+  process.env.PROVIDER_TOKEN_REFRESH_BUFFER_MS || 5 * 60 * 1000
+);
+
+function resolveEncryptionKey() {
+  const raw = process.env.PROVIDER_TOKEN_ENC_KEY;
+  if (!raw) {
+    throw new HttpsError(
+      'failed-precondition',
+      'PROVIDER_TOKEN_ENC_KEY is not configured'
+    );
+  }
+
+  let key;
+  try {
+    key = Buffer.from(raw, 'base64');
+  } catch (error) {
+    logger.error('Failed to parse PROVIDER_TOKEN_ENC_KEY as base64', error);
+    throw new HttpsError(
+      'failed-precondition',
+      'PROVIDER_TOKEN_ENC_KEY must be base64 encoded'
+    );
+  }
+  if (key.length !== 32) {
+    throw new HttpsError(
+      'failed-precondition',
+      'PROVIDER_TOKEN_ENC_KEY must decode to 32 bytes'
+    );
+  }
+  return key;
+}
+
+function encryptSecret(plainText, key) {
+  if (!plainText) return null;
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const ciphertext = Buffer.concat([
+    cipher.update(plainText, 'utf8'),
+    cipher.final(),
+  ]);
+  const authTag = cipher.getAuthTag();
+  return Buffer.concat([iv, authTag, ciphertext]).toString('base64');
+}
+
+exports.handleProviderToken = onCall(async (request) => {
+  const { auth, data } = request;
+  if (!auth || !auth.uid) {
+    throw new HttpsError('unauthenticated', 'User authentication required');
+  }
+
+  const payload = data || {};
+  const provider = payload.provider;
+  const appId = normalizeString(payload.appId);
+  const code = normalizeString(payload.code);
+  const redirectUri = normalizeString(payload.redirectUri);
+  const scope = normalizeString(payload.scope);
+  const codeVerifier = normalizeString(payload.codeVerifier);
+
+  if (!provider || !PROVIDER_CONFIG[provider]) {
+    throw new HttpsError('invalid-argument', 'Unsupported provider');
+  }
+  if (!appId) {
+    throw new HttpsError('invalid-argument', 'appId is required');
+  }
+  if (!code) {
+    throw new HttpsError('invalid-argument', 'OAuth code is required');
+  }
+  if (!redirectUri) {
+    throw new HttpsError('invalid-argument', 'redirectUri is required');
+  }
+
+  const config = PROVIDER_CONFIG[provider];
+  if (!config.clientId || !config.clientSecret) {
+    throw new HttpsError(
+      'failed-precondition',
+      `OAuth client credentials missing for provider: ${provider}`
+    );
+  }
+
+  const fetchImpl = globalThis.fetch;
+  if (typeof fetchImpl !== 'function') {
+    throw new HttpsError(
+      'failed-precondition',
+      'Fetch API not available in runtime'
+    );
+  }
+
+  const form = new URLSearchParams({
+    client_id: config.clientId,
+    client_secret: config.clientSecret,
+    code,
+    redirect_uri: redirectUri,
+    grant_type: 'authorization_code',
+  });
+  if (codeVerifier) {
+    form.set('code_verifier', codeVerifier);
+  }
+
+  let tokenResponse;
+  try {
+    const response = await fetchImpl(config.tokenEndpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: form.toString(),
+    });
+    if (!response.ok) {
+      const body = await response.text();
+      logger.error('Provider token exchange failed', {
+        provider,
+        status: response.status,
+        body,
+      });
+      throw new HttpsError(
+        'failed-precondition',
+        `Token exchange failed: ${response.status}`
+      );
+    }
+    tokenResponse = await response.json();
+  } catch (error) {
+    if (error instanceof HttpsError) {
+      throw error;
+    }
+    logger.error('Provider token exchange threw error', { provider, error });
+    throw new HttpsError('internal', 'Failed to exchange provider token');
+  }
+
+  if (!tokenResponse || !tokenResponse.access_token) {
+    throw new HttpsError(
+      'failed-precondition',
+      'Provider response missing access_token'
+    );
+  }
+
+  const now = Date.now();
+  const expiresInSeconds = Number(tokenResponse.expires_in) || null;
+  const expiresAt = expiresInSeconds
+    ? new Date(now + expiresInSeconds * 1000)
+    : null;
+  const refreshScheduledAt = expiresAt
+    ? new Date(expiresAt.getTime() - REFRESH_BUFFER_MS)
+    : null;
+  const finalScope = scope || tokenResponse.scope || config.defaultScopes;
+
+  const encryptionKey = resolveEncryptionKey();
+  const encryptedAccessToken = encryptSecret(
+    tokenResponse.access_token,
+    encryptionKey
+  );
+  const encryptedRefreshToken = encryptSecret(
+    tokenResponse.refresh_token || null,
+    encryptionKey
+  );
+
+  const firestore = admin.firestore();
+  const docRef = firestore.doc(buildUserDocPath(appId, auth.uid));
+
+  const providerPath = `socialConnections.providers.${provider}`;
+  const tokensPath = `${providerPath}.tokens`;
+  const updateData = {
+    [`${tokensPath}.encryptedAccessToken`]: encryptedAccessToken,
+    [`${tokensPath}.encryptedRefreshToken`]: encryptedRefreshToken,
+    [`${tokensPath}.tokenType`]:
+      normalizeString(tokenResponse.token_type) || 'Bearer',
+    [`${tokensPath}.scope`]: finalScope,
+    [`${tokensPath}.expiresIn`]: expiresInSeconds,
+    [`${tokensPath}.expiresAt`]: expiresAt,
+    [`${tokensPath}.refreshScheduledAt`]: refreshScheduledAt,
+    [`${tokensPath}.updatedAt`]: FieldValue.serverTimestamp(),
+    [`${providerPath}.updatedAt`]: FieldValue.serverTimestamp(),
+    'socialConnections.providers.updatedAt': FieldValue.serverTimestamp(),
+    'socialConnections.updatedAt': FieldValue.serverTimestamp(),
+  };
+
+  if (!tokenResponse.refresh_token) {
+    updateData[`${tokensPath}.encryptedRefreshToken`] = null;
+  }
+
+  try {
+    await docRef.set(updateData, { merge: true });
+  } catch (error) {
+    logger.error('Failed to persist encrypted provider tokens', {
+      provider,
+      userId: auth.uid,
+      error,
+    });
+    throw new HttpsError('internal', 'Failed to persist provider tokens');
+  }
+
+  return {
+    provider,
+    scope: finalScope,
+    expiresAt: expiresAt ? expiresAt.toISOString() : null,
+    refreshScheduledAt: refreshScheduledAt
+      ? refreshScheduledAt.toISOString()
+      : null,
+    tokenType:
+      normalizeString(tokenResponse.token_type) || 'Bearer',
+  };
 });
 
 exports.exchangeMetaCode = onCall(async (request) => {

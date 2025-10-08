@@ -4,6 +4,8 @@ import { getFirestore } from 'firebase/firestore';
 import { getFunctions } from 'firebase/functions';
 import {
   getAuth,
+  setPersistence,
+  browserLocalPersistence,
   signInAnonymously,
   signInWithCustomToken,
   onAuthStateChanged,
@@ -80,6 +82,13 @@ export function ensureFirebaseApp() {
 
     firestoreDb = getFirestore(firebaseApp);
     firebaseAuth = getAuth(firebaseApp);
+    if (typeof window !== 'undefined') {
+      void setPersistence(firebaseAuth, browserLocalPersistence).catch(
+        (error) => {
+          console.warn('設定認證持久化失敗:', error);
+        }
+      );
+    }
 
     return {
       app: firebaseApp,
@@ -129,6 +138,12 @@ export async function ensureAuthUser() {
 
       const performSignIn = async () => {
         try {
+          if (auth.currentUser) {
+            settled = true;
+            unsubscribe();
+            resolve(auth.currentUser);
+            return;
+          }
           if (
             typeof __initial_auth_token !== 'undefined' &&
             __initial_auth_token
