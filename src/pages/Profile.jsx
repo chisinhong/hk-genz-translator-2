@@ -161,6 +161,21 @@ const ProfilePage = () => {
   const canManageMeta = !isAnonymous;
   const googleLinked = Boolean(googleConnection);
 
+  if (isLoading) {
+    return (
+      <div className="container relative mx-auto flex min-h-screen max-w-4xl flex-col items-center justify-center gap-6 px-4 py-12 text-white">
+        <BackButton className="absolute left-4 top-4" />
+        <Loader2 size={36} className="animate-spin text-white/70" />
+        <div className="space-y-2 text-center">
+          <p className="text-lg font-semibold">正在載入會員資料</p>
+          <p className="text-sm text-white/70">
+            為你同步最新的翻譯額度與任務進度，請稍候片刻。
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   const tasksConfig = useMemo(
     () => [
       {
