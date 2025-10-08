@@ -111,11 +111,14 @@ export function TranslationUsageProvider({
 
       try {
         const usage = await fetchTodayUsage();
+        const localCount = readLocalUsageCount();
+        const mergedCount = Math.max(usage.count, localCount);
+        writeLocalUsageCount(mergedCount);
         if (!isMounted) return;
         setState((prev) => ({
           ...prev,
           userId: usage.userId,
-          translationCount: usage.count,
+          translationCount: mergedCount,
           storageMode: 'remote',
           isLoading: false,
           dailyLimit: Number.isFinite(authDailyLimit)
@@ -170,10 +173,13 @@ export function TranslationUsageProvider({
     setState((prev) => ({ ...prev, isLoading: true }));
     try {
       const usage = await fetchTodayUsage();
+      const localCount = readLocalUsageCount();
+      const mergedCount = Math.max(usage.count, localCount);
+      writeLocalUsageCount(mergedCount);
       setState((prev) => ({
         ...prev,
         userId: usage.userId,
-        translationCount: usage.count,
+        translationCount: mergedCount,
         storageMode: 'remote',
         isLoading: false,
         dailyLimit: Number.isFinite(authDailyLimit)
