@@ -10,7 +10,7 @@
     "logs": "firebase functions:log",
     "build": "tsc",
     "test": "node --test test/providerTokenHandler.test.js",
-    "supabase:migrate": "node scripts/migrateFirestoreToSupabase.js"
+    "supabase:sync-embeddings": "node scripts/syncEmbeddings.js"
   },
   "engines": {
     "node": "20"

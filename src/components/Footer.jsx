@@ -1,8 +1,6 @@
 import React from 'react';
-import { useContribution } from '../utils/ContributionContext';
 
 export default function Footer() {
-  const { openModal } = useContribution();
   const footerSections = [
     {
       title: 'HK GenZ翻譯器',
@@ -17,7 +15,6 @@ export default function Footer() {
       title: '功能',
       content: [
         { type: 'link', label: '即時翻譯', href: '#' },
-        { type: 'button', label: '貢獻新詞', onClick: openModal },
         { type: 'link', label: '詞典典藏', href: '#' },
       ],
     },
@@ -66,17 +63,6 @@ export default function Footer() {
                     >
                       {item.label}
                     </a>
-                  );
-                }
-                if (item.type === 'button') {
-                  return (
-                    <button
-                      key={i}
-                      onClick={item.onClick || openModal}
-                      className="block text-sm text-gray-300 hover:text-white bg-transparent border-none text-left p-0"
-                    >
-                      {item.label}
-                    </button>
                   );
                 }
                 return null;

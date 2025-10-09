@@ -1,12 +1,13 @@
-# Supabase Integration (Ticket 2)
+# Supabase Integration (Tickets 2-3)
 
 This directory tracks the database schema and tooling that backs the new Supabase
 stack (Postgres + pgvector).
 
 ## Migrations
 
-- `migrations/001_init_schema.sql` – initial schema for phrases, translations,
-  vector store, usage analytics, and raw user submissions.  
+- `migrations/001_init_schema.sql` – initial schema for phrases, translations, vector store, usage analytics, and the manual submissions table.
+- `migrations/002_embeddings.sql` – helper functions (`get_phrases_pending_embedding`, `upsert_phrase_embedding`) used by the embedding sync script.
+  
   Run it in the Supabase SQL editor (or through the CLI) after enabling the
   required extensions:
 
@@ -29,40 +30,34 @@ VITE_SUPABASE_ANON_KEY=<anon-key>
 # Server / scripts / Cloud Functions
 SUPABASE_URL=https://<project>.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=<service-role-key>
+GEMINI_API_KEY=<embedding-provider-key>
+GEMINI_EMBED_MODEL=text-embedding-004          # optional override
 # Optional: direct Postgres connection string
 SUPABASE_DB_URL=postgresql://username:password@host:5432/postgres
 ```
 
-If you run the migration script locally you also need:
+## Content management
 
-```bash
-GOOGLE_APPLICATION_CREDENTIALS=/path/to/firebase-service-account.json
-FIREBASE_APP_ID=<artifacts app id>  # e.g. genz-translator-2
-```
+User submissions are no longer collected in-app. Maintain the `public.submissions` table manually (e.g. via Supabase Table Editor) when new words are sourced from Threads or other channels.
 
-## One-off data migration
+## Embedding sync
 
-Inside `functions/scripts` there is `migrateFirestoreToSupabase.js`.  
-It reads Firestore contributions (`artifacts/<appId>/public/data/contributions`)
-and upserts them into Supabase `public.submissions`.
-
-Example invocation:
+`functions/scripts/syncEmbeddings.js` fetches phrases that lack embeddings (or whose embeddings are older than the phrase `updated_at`), generates vectors via Google Gemini Embeddings API, and upserts them using the helper functions above.
 
 ```bash
 cd functions
-export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
-export FIREBASE_APP_ID=genz-translator-2
 export SUPABASE_URL=https://<project>.supabase.co
 export SUPABASE_SERVICE_ROLE_KEY=<service-role-key>
-npm run supabase:migrate
+export GEMINI_API_KEY=<gemini-api-key>
+export GEMINI_EMBED_MODEL=text-embedding-004    # optional
+export EMBEDDING_BATCH_SIZE=50                   # optional
+npm run supabase:sync-embeddings
 ```
 
-> The script uses the Supabase REST API (PostgREST). Make sure Row Level
-> Security is configured to allow the service role to write to the target tables.
+The script includes exponential backoff for both Gemini calls and Supabase RPC upserts.
 
 ## Next steps
 
 - Seed the new tables with your canonical slang/translation dataset.
-- Implement embeddings generation (Ticket 3) and Supabase query API (Ticket 4).
-- Replace Firestore reads in the application with Supabase queries once the
-  data has been fully migrated.
+- Implement Supabase query API (Ticket 4) for semantic search.
+- Replace Firestore reads in the application with Supabase queries once the data has been fully migrated.

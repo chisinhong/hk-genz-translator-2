@@ -32,10 +32,11 @@ create unique index if not exists phrase_translations_phrase_variant_key
 
 -- Vector store for semantic search
 create table if not exists public.phrase_embeddings (
-  phrase_id uuid primary key references public.phrases(id) on delete cascade,
-  model text not null,
+  phrase_id uuid not null references public.phrases(id) on delete cascade,
+  model text not null default 'text-embedding-3-small',
   embedding vector(1536) not null,
-  embedded_at timestamptz not null default now()
+  embedded_at timestamptz not null default now(),
+  primary key (phrase_id, model)
 );
 
 -- Usage analytics for rate limiting / insights

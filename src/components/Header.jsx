@@ -1,11 +1,9 @@
 import React from 'react';
-import { useContribution } from '../utils/ContributionContext';
 import { useTester } from '../utils/TesterContext';
 import AuthStatus from './Auth/AuthStatus';
 
 export default function Header() {
   const { showTester, setShowTester } = useTester();
-  const { openModal } = useContribution();
   const isDevelopment = import.meta.env.MODE === 'development';
 
   return (
@@ -15,14 +13,6 @@ export default function Header() {
           <h1 className="text-2xl font-bold text-white">🇭🇰 GenZ翻譯器</h1>
         </a>
         <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={openModal}
-            className="bg-white/15 hover:bg-white/25 text-white px-4 py-2 rounded-lg text-sm font-medium transition"
-          >
-            貢獻新詞
-          </button>
-
           {/* 開發測試切換按鈕 (正式版請移除) */}
           {isDevelopment && (
             <button

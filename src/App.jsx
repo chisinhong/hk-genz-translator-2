@@ -6,13 +6,12 @@ import SimpleTest from './components/SimpleTest';
 import AdPlaceholder from './components/common/AdPlaceholder';
 import StatCard from './components/common/StatCard';
 import Footer from './components/Footer';
-import ContributionModal from './components/Contribution/ContributionModal';
 import PrivacyPolicy from './pages/PrivacyPolicy';
+import { getAuth } from 'firebase/auth';
 import Terms from './pages/Terms';
 import About from './pages/About';
 import ProfilePage from './pages/Profile';
 import MetaOAuthCallback from './pages/MetaOAuthCallback';
-import { ContributionProvider } from './utils/ContributionContext';
 import { TesterProvider, useTester } from './utils/TesterContext';
 import { TranslationUsageProvider } from './utils/TranslationUsageContext';
 import { AuthProvider } from './utils/AuthContext';
@@ -30,7 +29,6 @@ function AppContent() {
 
   return (
     <>
-      <ContributionModal />
       <Header />
       <main className="container mx-auto px-4 py-8 md:py-16 text-center">
         {/* <AdPlaceholder
@@ -106,32 +104,26 @@ function App() {
 
   return (
     <TesterProvider>
-      <ContributionProvider>
-        <AuthProvider>
-          <TranslationUsageProvider>
-            <UpgradeModalProvider>
-              <Theme>
-                <BrowserRouter>
-                  <Routes>
-                    <Route path="/" element={<AppContent />} />
-                    <Route path="/settings" element={<ProfilePage />} />
-                    <Route
-                      path="/meta-callback"
-                      element={<MetaOAuthCallback />}
-                    />
-                    <Route path="/privacy" element={<PrivacyPolicy />} />
-                    <Route path="/terms" element={<Terms />} />
-                    <Route path="/about" element={<About />} />
-                  </Routes>
-                </BrowserRouter>
-              </Theme>
-            </UpgradeModalProvider>
-          </TranslationUsageProvider>
-        </AuthProvider>
-      </ContributionProvider>
+      <AuthProvider>
+        <TranslationUsageProvider>
+          <UpgradeModalProvider>
+            <Theme>
+              <BrowserRouter>
+                <Routes>
+                  <Route path="/" element={<AppContent />} />
+                  <Route path="/settings" element={<ProfilePage />} />
+                  <Route path="/meta-callback" element={<MetaOAuthCallback />} />
+                  <Route path="/privacy" element={<PrivacyPolicy />} />
+                  <Route path="/terms" element={<Terms />} />
+                  <Route path="/about" element={<About />} />
+                </Routes>
+              </BrowserRouter>
+            </Theme>
+          </UpgradeModalProvider>
+        </TranslationUsageProvider>
+      </AuthProvider>
     </TesterProvider>
   );
 }
 
 export default App;
-import { getAuth } from 'firebase/auth';
