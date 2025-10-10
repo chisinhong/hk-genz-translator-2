@@ -10,6 +10,7 @@ interface SearchOptions {
   signal?: AbortSignal;
   client?: SupabaseClient;
   clientConfigOverrides?: Partial<SupabaseClientConfig>;
+  onMetrics?: (metrics: SearchMetrics) => void;
 }
 
 interface TranslationRow {
@@ -46,6 +47,14 @@ export interface SimilarPhraseResult {
   translations: SimilarPhraseTranslation[];
 }
 
+export interface SearchMetrics {
+  totalDurationMs: number;
+  embeddingDurationMs: number;
+  supabaseDurationMs: number;
+  matchCount: number;
+  topSimilarity: number | null;
+}
+
 export async function searchSimilarPhrases(
   query: string,
   topK = DEFAULT_TOP_K,
@@ -64,8 +73,18 @@ export async function searchSimilarPhrases(
   const clampedTopK = Math.max(1, Math.min(Math.floor(topK), 100));
   const clampedThreshold = clamp(threshold, 0, 1);
 
+  const overallStart = Date.now();
+  const embeddingStart = overallStart;
+
   const embedding = await generateEmbedding(trimmed, options.signal);
   if (!embedding.length) {
+    options.onMetrics?.({
+      totalDurationMs: Date.now() - overallStart,
+      embeddingDurationMs: Date.now() - embeddingStart,
+      supabaseDurationMs: 0,
+      matchCount: 0,
+      topSimilarity: null,
+    });
     return [];
   }
 
@@ -76,6 +95,7 @@ export async function searchSimilarPhrases(
       ...options.clientConfigOverrides,
     });
 
+  const supabaseStart = Date.now();
   const payload = {
     p_query_embedding: toVectorLiteral(embedding),
     p_match_count: clampedTopK,
@@ -89,11 +109,22 @@ export async function searchSimilarPhrases(
       signal: options.signal,
     })) ?? [];
 
-  if (!Array.isArray(rows)) {
-    return [];
-  }
+  const results = Array.isArray(rows) ? rows.map(mapRowToResult) : [];
 
-  return rows.map(mapRowToResult);
+  const supabaseDurationMs = Date.now() - supabaseStart;
+  const totalDurationMs = Date.now() - overallStart;
+
+  const topSimilarity = results.length ? results[0].similarity : null;
+
+  options.onMetrics?.({
+    totalDurationMs,
+    embeddingDurationMs: supabaseStart - embeddingStart,
+    supabaseDurationMs,
+    matchCount: results.length,
+    topSimilarity,
+  });
+
+  return results;
 }
 
 async function generateEmbedding(

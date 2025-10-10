@@ -8,7 +8,16 @@ const SEARCH_MODULE_PATH = path.join(__dirname, '../lib/searchSimilarPhrases.js'
 const INDEX_MODULE_PATH = path.join(__dirname, '../lib/index.js');
 
 const dynamicStub = {
-  impl: async () => [],
+  impl: async (_query, _topK, _threshold, options = {}) => {
+    options?.onMetrics?.({
+      totalDurationMs: 5,
+      embeddingDurationMs: 2,
+      supabaseDurationMs: 3,
+      matchCount: 0,
+      topSimilarity: null,
+    });
+    return [];
+  },
 };
 
 const originalSearchModule = require.cache[SEARCH_MODULE_PATH];
@@ -61,9 +70,16 @@ test('queryPhrases returns structured results with rank', async () => {
   ];
 
   await withQueryFunction(
-    async (_query, topK, threshold) => {
+    async (_query, topK, threshold, options) => {
       assert.equal(topK, 10);
       assert.equal(threshold, 0.6);
+      options?.onMetrics?.({
+        totalDurationMs: 12,
+        embeddingDurationMs: 4,
+        supabaseDurationMs: 6,
+        matchCount: mockResults.length,
+        topSimilarity: mockResults[0].similarity,
+      });
       return mockResults;
     },
     async (wrapped) => {
@@ -89,15 +105,25 @@ test('queryPhrases returns structured results with rank', async () => {
         rank: 2,
         ...mockResults[1],
       });
+      assert.ok(response.metrics);
+      assert.equal(response.metrics.matchCount, 2);
+      assert.equal(response.metrics.topSimilarity, 0.91);
     },
   );
 });
 
 test('queryPhrases clamps inputs and accepts string numbers', async () => {
   await withQueryFunction(
-    async (_query, topK, threshold) => {
+    async (_query, topK, threshold, options) => {
       assert.equal(topK, 25);
       assert.equal(threshold, 1);
+      options?.onMetrics?.({
+        totalDurationMs: 8,
+        embeddingDurationMs: 3,
+        supabaseDurationMs: 4,
+        matchCount: 0,
+        topSimilarity: null,
+      });
       return [];
     },
     async (wrapped) => {
@@ -111,6 +137,8 @@ test('queryPhrases clamps inputs and accepts string numbers', async () => {
 
       assert.equal(response.topK, 25);
       assert.equal(response.threshold, 1);
+      assert.ok(response.metrics);
+      assert.equal(response.metrics.matchCount, 0);
     },
   );
 });

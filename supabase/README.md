@@ -61,3 +61,4 @@ The script includes exponential backoff for both Gemini calls and Supabase RPC u
 - Seed the new tables with your canonical slang/translation dataset.
 - Implement Supabase query API (Ticket 4) for semantic search.
 - Replace Firestore reads in the application with Supabase queries once the data has been fully migrated.
+- Review `docs/monitoring.md` for observability and retention guidance.

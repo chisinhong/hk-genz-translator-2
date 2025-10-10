@@ -108,11 +108,17 @@ test('searchSimilarPhrases returns formatted results', async (t) => {
       const { searchSimilarPhrases } = loadModule();
       const client = createSupabaseClient(fetchStub);
 
+      let capturedMetrics = null;
       const results = await searchSimilarPhrases(
         'hello world',
         undefined,
         undefined,
-        { client }
+        {
+          client,
+          onMetrics: (metrics) => {
+            capturedMetrics = metrics;
+          },
+        }
       );
 
       assert.equal(results.length, 1);
@@ -124,6 +130,10 @@ test('searchSimilarPhrases returns formatted results', async (t) => {
       assert.deepEqual(first.metadata, { level: 'basic' });
       assert.equal(first.translations.length, 1);
       assert.equal(first.translations[0].translation, 'formal text');
+      assert.ok(capturedMetrics);
+      assert.equal(capturedMetrics.matchCount, 1);
+      assert.equal(typeof capturedMetrics.totalDurationMs, 'number');
+      assert.equal(capturedMetrics.topSimilarity, 0.92);
     }
   );
 });
@@ -155,10 +165,14 @@ test('searchSimilarPhrases handles empty results', async () => {
 
       const { searchSimilarPhrases } = loadModule();
       const client = createSupabaseClient(fetchStub);
+      const metrics = [];
       const results = await searchSimilarPhrases('nothing here', 3, 0.8, {
         client,
+        onMetrics: (data) => metrics.push(data),
       });
       assert.deepEqual(results, []);
+      assert.equal(metrics.length, 1);
+      assert.equal(metrics[0].matchCount, 0);
     }
   );
 });

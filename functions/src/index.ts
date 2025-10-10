@@ -13,6 +13,7 @@ import {HttpsError, onCall} from "firebase-functions/v2/https";
 import {initializeApp} from "firebase-admin/app";
 import {FieldValue, getFirestore} from "firebase-admin/firestore";
 import {searchSimilarPhrases} from "./searchSimilarPhrases";
+import {randomUUID} from "node:crypto";
 
 setGlobalOptions({maxInstances: 10});
 
@@ -447,21 +448,59 @@ export const queryPhrases = onCall(async (request) => {
     0.7,
   );
 
+  const requestId = safeRandomUUID();
+  const totalStart = Date.now();
+
   logger.info("queryPhrases invoked", {
     uid: auth?.uid ?? null,
+    requestId,
     topK,
     threshold,
     queryLength: query.length,
   });
 
+  let metricsSnapshot: any = null;
+
   try {
-    const results = await searchSimilarPhrases(query, topK, threshold);
+    const results = await searchSimilarPhrases(query, topK, threshold, {
+      onMetrics: (metrics) => {
+        metricsSnapshot = metrics;
+      },
+    });
+
+    const totalDurationMs = Date.now() - totalStart;
+    const metricsPayload: {
+      totalDurationMs: number;
+      embeddingDurationMs?: number;
+      supabaseDurationMs?: number;
+      matchCount?: number;
+      topSimilarity?: number | null;
+    } = { totalDurationMs };
+
+    if (metricsSnapshot) {
+      const snapshot = metricsSnapshot;
+      metricsPayload.embeddingDurationMs = snapshot.embeddingDurationMs;
+      metricsPayload.supabaseDurationMs = snapshot.supabaseDurationMs;
+      metricsPayload.matchCount = snapshot.matchCount;
+      metricsPayload.topSimilarity = snapshot.topSimilarity;
+    }
+
+    logger.info("queryPhrases completed", {
+      uid: auth?.uid ?? null,
+      requestId,
+      queryLength: query.length,
+      topK,
+      threshold,
+      count: results.length,
+      metrics: metricsPayload,
+    });
 
     return {
       query,
       topK,
       threshold,
       count: results.length,
+      metrics: metricsPayload,
       results: results.map((item, index) => ({
         rank: index + 1,
         phraseId: item.phraseId,
@@ -475,9 +514,12 @@ export const queryPhrases = onCall(async (request) => {
   } catch (error) {
     logger.error("queryPhrases failed", {
       uid: auth?.uid ?? null,
+      requestId,
       queryLength: query.length,
       topK,
       threshold,
+      durationMs: Date.now() - totalStart,
+      metrics: metricsSnapshot,
       error,
     });
     throw new HttpsError(
@@ -486,6 +528,14 @@ export const queryPhrases = onCall(async (request) => {
     );
   }
 });
+
+function safeRandomUUID(): string {
+  try {
+    return randomUUID();
+  } catch (error) {
+    return `query-${Date.now()}`;
+  }
+}
 
 function coerceNumber(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) {
