@@ -8,9 +8,11 @@
  */
 
 import {setGlobalOptions} from "firebase-functions";
+import * as logger from "firebase-functions/logger";
 import {HttpsError, onCall} from "firebase-functions/v2/https";
 import {initializeApp} from "firebase-admin/app";
 import {FieldValue, getFirestore} from "firebase-admin/firestore";
+import {searchSimilarPhrases} from "./searchSimilarPhrases";
 
 setGlobalOptions({maxInstances: 10});
 
@@ -415,3 +417,99 @@ export const unlinkGoogleProvider = onCall(async (request) => {
     status: "unlinked",
   };
 });
+
+const MAX_TOP_K = 25;
+
+export const queryPhrases = onCall(async (request) => {
+  const {auth, data} = request;
+  const payload = (data ?? {}) as {
+    query?: unknown;
+    topK?: unknown;
+    threshold?: unknown;
+  };
+
+  const query = typeof payload.query === "string" ? payload.query.trim() : "";
+  if (!query) {
+    throw new HttpsError("invalid-argument", "query must be a non-empty string");
+  }
+
+  const topK = clampNumber(
+    coerceNumber(payload.topK) ?? undefined,
+    1,
+    MAX_TOP_K,
+    5,
+  );
+
+  const threshold = clampNumber(
+    coerceNumber(payload.threshold) ?? undefined,
+    0,
+    1,
+    0.7,
+  );
+
+  logger.info("queryPhrases invoked", {
+    uid: auth?.uid ?? null,
+    topK,
+    threshold,
+    queryLength: query.length,
+  });
+
+  try {
+    const results = await searchSimilarPhrases(query, topK, threshold);
+
+    return {
+      query,
+      topK,
+      threshold,
+      count: results.length,
+      results: results.map((item, index) => ({
+        rank: index + 1,
+        phraseId: item.phraseId,
+        phrase: item.phrase,
+        similarity: item.similarity,
+        distance: item.distance,
+        metadata: item.metadata,
+        translations: item.translations,
+      })),
+    };
+  } catch (error) {
+    logger.error("queryPhrases failed", {
+      uid: auth?.uid ?? null,
+      queryLength: query.length,
+      topK,
+      threshold,
+      error,
+    });
+    throw new HttpsError(
+      "internal",
+      "Failed to query similar phrases. Please try again later.",
+    );
+  }
+});
+
+function coerceNumber(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  return undefined;
+}
+
+function clampNumber(
+  value: number | undefined,
+  min: number,
+  max: number,
+  fallback: number,
+): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.min(Math.max(value, min), max);
+}
