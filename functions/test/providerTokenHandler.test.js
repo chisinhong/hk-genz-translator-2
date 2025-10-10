@@ -4,6 +4,7 @@ const functionsTest = require('firebase-functions-test')();
 const admin = require('firebase-admin');
 
 const originalFirestore = admin.firestore;
+const firestoreDescriptor = Object.getOwnPropertyDescriptor(admin, 'firestore');
 const TEST_KEY = Buffer.alloc(32, 7).toString('base64');
 
 function setupEnvironment({ fetchResponse, fetchShouldFail = false }) {
@@ -36,8 +37,12 @@ function setupEnvironment({ fetchResponse, fetchShouldFail = false }) {
     },
   };
 
-  admin.firestore = () => ({
-    doc: () => fakeDoc,
+  Object.defineProperty(admin, 'firestore', {
+    configurable: true,
+    enumerable: true,
+    value: Object.assign(() => ({
+      doc: () => fakeDoc,
+    }), { FieldValue: originalFirestore.FieldValue }),
   });
 
   delete require.cache[require.resolve('../index')];
@@ -48,7 +53,11 @@ function setupEnvironment({ fetchResponse, fetchShouldFail = false }) {
     fakeDoc,
     restore: () => {
       global.fetch = originalFetch;
-      admin.firestore = originalFirestore;
+      if (firestoreDescriptor) {
+        Object.defineProperty(admin, 'firestore', firestoreDescriptor);
+      } else {
+        admin.firestore = originalFirestore;
+      }
       delete process.env.PROVIDER_TOKEN_ENC_KEY;
       delete process.env.GOOGLE_OAUTH_CLIENT_ID;
       delete process.env.GOOGLE_OAUTH_CLIENT_SECRET;
@@ -73,15 +82,15 @@ test('handleProviderToken exchanges code and stores encrypted tokens', async () 
 
   try {
     const wrapped = functionsTest.wrap(myFunctions.handleProviderToken);
-    const result = await wrapped(
-      {
+    const result = await wrapped({
+      data: {
         provider: 'google',
         appId: 'app-123',
         code: 'auth-code',
         redirectUri: 'https://example.com/callback',
       },
-      { auth: { uid: 'user-1', token: {} } }
-    );
+      auth: { uid: 'user-1', token: {} },
+    });
 
     assert.equal(result.provider, 'google');
     assert.equal(result.tokenType, 'Bearer');
@@ -92,7 +101,15 @@ test('handleProviderToken exchanges code and stores encrypted tokens', async () 
     const [call] = fakeDoc.setCalls;
     assert.deepEqual(call.options, { merge: true });
 
-    const tokens = call.data['socialConnections.providers.google.tokens'];
+    const tokens = Object.entries(call.data).reduce((acc, [key, value]) => {
+      const prefix = 'socialConnections.providers.google.tokens.';
+      if (key.startsWith(prefix)) {
+        const field = key.slice(prefix.length);
+        acc[field] = value;
+      }
+      return acc;
+    }, {});
+
     assert.ok(tokens.encryptedAccessToken, 'expected encrypted access token');
     assert.notEqual(tokens.encryptedAccessToken, fakeResponse.access_token);
     assert.ok(tokens.encryptedRefreshToken, 'expected encrypted refresh token');
@@ -111,15 +128,15 @@ test('handleProviderToken throws when provider exchange fails', async () => {
 
     await assert.rejects(
       () =>
-        wrapped(
-          {
+        wrapped({
+          data: {
             provider: 'google',
             appId: 'app-123',
             code: 'bad-code',
             redirectUri: 'https://example.com/callback',
           },
-          { auth: { uid: 'user-1', token: {} } }
-        ),
+          auth: { uid: 'user-1', token: {} },
+        }),
       (error) => error.code === 'failed-precondition'
     );
   } finally {
