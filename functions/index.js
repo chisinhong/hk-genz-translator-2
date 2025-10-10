@@ -4,6 +4,7 @@ const { onCall, HttpsError } = require('firebase-functions/v2/https');
 const logger = require('firebase-functions/logger');
 const admin = require('firebase-admin');
 const crypto = require('node:crypto');
+const { searchSimilarPhrases } = require('./lib/searchSimilarPhrases');
 
 if (!admin.apps.length) {
   admin.initializeApp();
@@ -29,6 +30,8 @@ const TASK_IDS = {
   invite: 'invite',
   share: 'share',
 };
+
+const MAX_TOP_K = 25;
 
 function todayKey() {
   return new Date().toISOString().slice(0, ISO_DATE_LENGTH);
@@ -1006,4 +1009,119 @@ exports.unlinkGoogleProvider = onCall(async (request) => {
     provider: 'google',
     status: 'unlinked',
   };
+});
+
+function coerceNumber(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
+function clampNumber(value, min, max, fallback) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.min(Math.max(value, min), max);
+}
+
+function safeRandomUUID() {
+  try {
+    if (typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
+    }
+  } catch (error) {
+    return `query-${Date.now()}`;
+  }
+}
+
+exports.queryPhrases = onCall(async (request) => {
+  const { auth, data } = request;
+  const payload = data || {};
+
+  const query = typeof payload.query === 'string' ? payload.query.trim() : '';
+  if (!query) {
+    throw new HttpsError('invalid-argument', 'query must be a non-empty string');
+  }
+
+  const topK = clampNumber(coerceNumber(payload.topK), 1, MAX_TOP_K, 5);
+  const threshold = clampNumber(coerceNumber(payload.threshold), 0, 1, 0.7);
+
+  const requestId = safeRandomUUID();
+  const totalStart = Date.now();
+
+  logger.info('queryPhrases invoked', {
+    uid: auth?.uid ?? null,
+    requestId,
+    topK,
+    threshold,
+    queryLength: query.length,
+  });
+
+  let metricsSnapshot = null;
+
+  try {
+    const results = await searchSimilarPhrases(query, topK, threshold, {
+      onMetrics: (metrics) => {
+        metricsSnapshot = metrics;
+      },
+    });
+
+    const totalDurationMs = Date.now() - totalStart;
+    const metricsPayload = { totalDurationMs };
+    if (metricsSnapshot) {
+      metricsPayload.embeddingDurationMs = metricsSnapshot.embeddingDurationMs;
+      metricsPayload.supabaseDurationMs = metricsSnapshot.supabaseDurationMs;
+      metricsPayload.matchCount = metricsSnapshot.matchCount;
+      metricsPayload.topSimilarity = metricsSnapshot.topSimilarity;
+    }
+
+    logger.info('queryPhrases completed', {
+      uid: auth?.uid ?? null,
+      requestId,
+      queryLength: query.length,
+      topK,
+      threshold,
+      count: results.length,
+      metrics: metricsPayload,
+    });
+
+    return {
+      query,
+      topK,
+      threshold,
+      count: results.length,
+      metrics: metricsPayload,
+      results: results.map((item, index) => ({
+        rank: index + 1,
+        phraseId: item.phraseId,
+        phrase: item.phrase,
+        similarity: item.similarity,
+        distance: item.distance,
+        metadata: item.metadata,
+        translations: item.translations,
+      })),
+    };
+  } catch (error) {
+    logger.error('queryPhrases failed', {
+      uid: auth?.uid ?? null,
+      requestId,
+      queryLength: query.length,
+      topK,
+      threshold,
+      durationMs: Date.now() - totalStart,
+      metrics: metricsSnapshot,
+      error,
+    });
+    throw new HttpsError(
+      'internal',
+      'Failed to query similar phrases. Please try again later.'
+    );
+  }
 });

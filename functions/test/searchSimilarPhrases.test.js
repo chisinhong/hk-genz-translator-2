@@ -43,7 +43,7 @@ function withEnv(overrides, fn) {
   });
 }
 
-test('searchSimilarPhrases returns formatted results', async (t) => {
+test('searchSimilarPhrases returns formatted results', async () => {
   await withEnv(
     {
       SUPABASE_URL: 'https://project.supabase.co',
