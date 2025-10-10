@@ -14,6 +14,7 @@ import ProfilePage from './pages/Profile';
 import MetaOAuthCallback from './pages/MetaOAuthCallback';
 import { TesterProvider, useTester } from './utils/TesterContext';
 import { TranslationUsageProvider } from './utils/TranslationUsageContext';
+import { PhraseSearchProvider } from './utils/PhraseSearchContext';
 import { AuthProvider } from './utils/AuthContext';
 import { UpgradeModalProvider } from './components/Upgrade/UpgradeModalProvider';
 
@@ -106,20 +107,22 @@ function App() {
     <TesterProvider>
       <AuthProvider>
         <TranslationUsageProvider>
-          <UpgradeModalProvider>
-            <Theme>
-              <BrowserRouter>
-                <Routes>
-                  <Route path="/" element={<AppContent />} />
-                  <Route path="/settings" element={<ProfilePage />} />
-                  <Route path="/meta-callback" element={<MetaOAuthCallback />} />
-                  <Route path="/privacy" element={<PrivacyPolicy />} />
-                  <Route path="/terms" element={<Terms />} />
-                  <Route path="/about" element={<About />} />
-                </Routes>
-              </BrowserRouter>
-            </Theme>
-          </UpgradeModalProvider>
+          <PhraseSearchProvider>
+            <UpgradeModalProvider>
+              <Theme>
+                <BrowserRouter>
+                  <Routes>
+                    <Route path="/" element={<AppContent />} />
+                    <Route path="/settings" element={<ProfilePage />} />
+                    <Route path="/meta-callback" element={<MetaOAuthCallback />} />
+                    <Route path="/privacy" element={<PrivacyPolicy />} />
+                    <Route path="/terms" element={<Terms />} />
+                    <Route path="/about" element={<About />} />
+                  </Routes>
+                </BrowserRouter>
+              </Theme>
+            </UpgradeModalProvider>
+          </PhraseSearchProvider>
         </TranslationUsageProvider>
       </AuthProvider>
     </TesterProvider>

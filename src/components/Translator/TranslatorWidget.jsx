@@ -9,11 +9,14 @@ import {
   CheckCircle,
   Loader2,
   Sparkles,
+  Search,
+  Info,
 } from 'lucide-react';
 import { geminiTranslator } from '../../services/geminiAPI';
 import { useTranslationUsage } from '../../utils/TranslationUsageContext';
 import { trackTranslationAttempt } from '../../utils/analytics';
 import { useUpgradeModalContext } from '../Upgrade/UpgradeModalProvider';
+import { usePhraseSearch } from '../../utils/PhraseSearchContext';
 
 const TranslatorWidget = () => {
   // 基本狀態
@@ -40,6 +43,15 @@ const TranslatorWidget = () => {
     refreshUsage,
   } = useTranslationUsage();
   const { openModal: openUpgradeModal } = useUpgradeModalContext();
+  const {
+    matches: supabaseMatches,
+    isLoading: isSearchLoading,
+    error: searchError,
+    metadata: searchMetadata,
+    lastQuery: lastSearchQuery,
+    fetchSimilarPhrases,
+    resetSearch,
+  } = usePhraseSearch();
 
   // 引用
   const inputRef = useRef(null);
@@ -142,6 +154,8 @@ const TranslatorWidget = () => {
     setCopiedTranslationIndex(null);
     setQuotaDetails(null);
 
+    let searchPromise;
+
     try {
       const usageResult = await registerTranslationAttempt();
       if (!usageResult.allowed) {
@@ -181,6 +195,11 @@ const TranslatorWidget = () => {
       const remainingAfterAttempt =
         usageResult.quota?.remaining ??
         Math.max(appliedLimit - usageResult.translationCount, 0);
+
+      searchPromise = fetchSimilarPhrases(inputText, {
+        topK: 5,
+        threshold: 0.65,
+      });
 
       trackTranslationAttempt(translationType, {
         usage_mode: usageResult.storageMode,
@@ -253,6 +272,13 @@ const TranslatorWidget = () => {
       setError(displayMessage);
       setQuotaDetails(null);
     } finally {
+      if (searchPromise) {
+        try {
+          await searchPromise;
+        } catch (searchErrorUnhandled) {
+          console.warn('Supabase 相似詞搜尋未能完成:', searchErrorUnhandled);
+        }
+      }
       setIsLoading(false);
     }
   };
@@ -326,6 +352,7 @@ const TranslatorWidget = () => {
     setCopySuccess(false);
     setCopiedTranslationIndex(null);
     setQuotaDetails(null);
+    resetSearch();
     inputRef.current?.focus();
   };
 
@@ -392,6 +419,13 @@ const TranslatorWidget = () => {
     return 'text-red-600';
   };
 
+  const formatSimilarity = (value) => {
+    if (typeof value !== 'number' || Number.isNaN(value)) {
+      return null;
+    }
+    return `${Math.round(value * 100)}%`;
+  };
+
   const formattedTranslations = useMemo(() => {
     if (!outputText) return [];
     return outputText
@@ -399,6 +433,49 @@ const TranslatorWidget = () => {
       .map((item) => item.trim())
       .filter(Boolean);
   }, [outputText]);
+
+  const supabaseMetadataEntries = useMemo(() => {
+    if (!searchMetadata || typeof searchMetadata !== 'object') {
+      return [];
+    }
+
+    return Object.entries(searchMetadata)
+      .filter(([, value]) => value !== null && value !== undefined)
+      .map(([key, value]) => ({
+        key,
+        label: key,
+        value:
+          typeof value === 'object' ? JSON.stringify(value) : String(value),
+      }));
+  }, [searchMetadata]);
+
+  const renderMatchMetadata = (metadata) => {
+    if (!metadata || typeof metadata !== 'object') {
+      return null;
+    }
+
+    const entries = Object.entries(metadata)
+      .filter(([, value]) => value !== null && value !== undefined)
+      .slice(0, 4);
+
+    if (!entries.length) {
+      return null;
+    }
+
+    return (
+      <div className="flex flex-wrap gap-2 mt-2">
+        {entries.map(([key, value]) => (
+          <span
+            key={key}
+            className="text-xs bg-white/10 text-white/80 px-2 py-1 rounded-full"
+          >
+            {key}:{' '}
+            {typeof value === 'object' ? JSON.stringify(value) : String(value)}
+          </span>
+        ))}
+      </div>
+    );
+  };
 
   return (
     <div className="w-full max-w-4xl mx-auto">
@@ -654,8 +731,139 @@ const TranslatorWidget = () => {
           </button>
 
           <p className="text-white/60 text-sm mt-2">按 Ctrl+Enter 快速翻譯</p>
-        </div>
       </div>
+    </div>
+
+      {(isSearchLoading ||
+        supabaseMatches.length > 0 ||
+        searchError ||
+        lastSearchQuery) && (
+        <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-6 mb-6">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2 text-white">
+              <Search size={18} className="text-yellow-300" />
+              <span className="font-semibold">詞庫相似詞推薦</span>
+              {lastSearchQuery && (
+                <span className="text-xs text-white/60">
+                  查詢：「{lastSearchQuery}」
+                </span>
+              )}
+            </div>
+            {isSearchLoading && (
+              <div className="flex items-center gap-2 text-white/70 text-sm">
+                <Loader2 className="animate-spin" size={16} />
+                搜尋中...
+              </div>
+            )}
+          </div>
+
+          {supabaseMetadataEntries.length > 0 && (
+            <div className="flex flex-wrap gap-3 mb-4">
+              {supabaseMetadataEntries.map((item) => (
+                <span
+                  key={item.key}
+                  className="text-xs bg-white/5 text-white/70 px-2 py-1 rounded-md"
+                >
+                  {item.label}: {item.value}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {searchError && !isSearchLoading ? (
+            <div className="flex items-start gap-2 bg-red-500/15 border border-red-500/30 rounded-lg px-3 py-2 text-sm text-red-200 mb-4">
+              <AlertCircle size={16} className="flex-shrink-0 text-red-300" />
+              <div>
+                <p>Supabase 搜尋失敗：{searchError}</p>
+                <p className="text-xs mt-1 text-red-300/80">
+                  已改用 AI 翻譯結果，可稍後再試或檢查網絡連線。
+                </p>
+              </div>
+            </div>
+          ) : null}
+
+          {!searchError &&
+          !isSearchLoading &&
+          supabaseMatches.length === 0 ? (
+            <p className="text-sm text-white/70 flex items-center gap-2">
+              <Info size={16} className="text-white/50" />
+              未找到相似詞彙，已交由 AI 翻譯處理。
+            </p>
+          ) : null}
+
+          <div className="space-y-4">
+            {supabaseMatches.map((match, index) => (
+              <div
+                key={match.phraseId ?? `${match.phrase}-${index}`}
+                className={`p-4 rounded-xl border transition ${
+                  index === 0
+                    ? 'border-yellow-300/60 bg-yellow-200/10 shadow-lg shadow-yellow-500/10'
+                    : 'border-white/20 bg-white/5'
+                }`}
+              >
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="text-lg font-semibold text-white">
+                      {match.phrase}
+                    </p>
+                    {formatSimilarity(match.similarity) && (
+                      <p className="text-xs text-white/60 mt-1">
+                        相似度：{formatSimilarity(match.similarity)}
+                        {typeof match.distance === 'number' && (
+                          <span className="ml-2">
+                            距離：{match.distance.toFixed(3)}
+                          </span>
+                        )}
+                      </p>
+                    )}
+                  </div>
+                  <span className="text-xs uppercase tracking-widest text-white/50">
+                    Rank #{match.rank ?? index + 1}
+                  </span>
+                </div>
+
+                {renderMatchMetadata(match.metadata)}
+
+                {Array.isArray(match.translations) &&
+                  match.translations.length > 0 && (
+                    <div className="mt-3 space-y-2">
+                      {match.translations.map((translation) => (
+                        <div
+                          key={translation.id ?? translation.variant}
+                          className="bg-white/10 rounded-lg px-3 py-2"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="text-sm font-medium text-white">
+                              {translation.translation}
+                            </span>
+                            {translation.variant && (
+                              <span className="text-xs text-white/60">
+                                {translation.variant}
+                              </span>
+                            )}
+                          </div>
+                          {(translation.tone || translation.metadata) && (
+                            <div className="text-xs text-white/60 mt-1 space-y-1">
+                              {translation.tone && <p>語氣：{translation.tone}</p>}
+                              {translation.metadata && (
+                                <p>
+                                  資訊：
+                                  {typeof translation.metadata === 'object'
+                                    ? JSON.stringify(translation.metadata)
+                                    : String(translation.metadata)}
+                                </p>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* 快速示例 */}
       <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-6">
